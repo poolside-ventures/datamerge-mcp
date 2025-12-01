@@ -205,7 +205,30 @@ export class DataMergeClient {
     request: CompanyEnrichRequestV1,
   ): Promise<ApiResponse<CompanyEnrichResponseV1>> {
     const validated = CompanyEnrichRequestV1Schema.parse(request);
-    const response = await this.client.post('/v1/company/enrich', validated);
+    
+    // Transform the request to match API expectations
+    const apiRequest: any = { ...validated };
+    
+    // Convert country_code to array format if provided as string
+    if (apiRequest.country_code !== undefined) {
+      if (typeof apiRequest.country_code === 'string') {
+        // If it's an empty string, omit it; otherwise convert to array
+        if (apiRequest.country_code.trim() === '') {
+          delete apiRequest.country_code;
+        } else {
+          apiRequest.country_code = [apiRequest.country_code];
+        }
+      } else if (Array.isArray(apiRequest.country_code)) {
+        // Filter out empty strings from array
+        apiRequest.country_code = apiRequest.country_code.filter((cc: string) => cc && cc.trim() !== '');
+        // If array is empty after filtering, omit it
+        if (apiRequest.country_code.length === 0) {
+          delete apiRequest.country_code;
+        }
+      }
+    }
+    
+    const response = await this.client.post('/v1/company/enrich', apiRequest);
     return this.mapEnrichResponse(response.data);
   }
 

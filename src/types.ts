@@ -52,9 +52,9 @@ export interface CompanyEnrichRequestV1 {
   company_name?: string | undefined;
 
   /**
-   * Optional ISO 2-letter country code to improve matching
+   * Optional ISO 2-letter country code(s) to improve matching (can be string or array)
    */
-  country_code?: string | undefined;
+  country_code?: string | string[] | undefined;
 
   /**
    * When true, require a strict match for enrichment

@@ -23,7 +23,7 @@ const CompanyEnrichRequestBaseSchema = z
   .object({
     domain: z.string().optional(),
     company_name: z.string().optional(),
-    country_code: z.string().optional(),
+    country_code: z.union([z.string(), z.array(z.string())]).optional(),
     strict_match: z.boolean().optional(),
     global_ultimate: z.boolean().optional(),
     webhook_url: z.string().url().optional(),
