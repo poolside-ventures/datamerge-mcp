@@ -14,6 +14,7 @@ export class DataMergeMCPStreamable {
   private server: McpServer;
   private transports: Map<string, StreamableHTTPServerTransport> = new Map();
   private clients: Map<string, DataMergeClient> = new Map();
+  private apiKeys: Map<string, string> = new Map(); // Store API keys per session
 
   constructor() {
     this.server = new McpServer({
@@ -39,19 +40,27 @@ export class DataMergeMCPStreamable {
         },
       },
       async ({ apiKey, baseUrl }, extra) => {
-      if (!extra.sessionId) {
-        throw new Error('Session ID is required');
-      }
+        console.log(`🔧 configure_datamerge called: sessionId=${extra.sessionId}, hasApiKey=${!!apiKey}, hasBaseUrl=${!!baseUrl}`);
+        
+        if (!extra.sessionId) {
+          console.error('❌ configure_datamerge called without sessionId');
+          throw new Error('Session ID is required');
+        }
       
         const key = apiKey ?? process.env['DATAMERGE_API_KEY'];
         if (!key) {
+          console.error(`❌ configure_datamerge: No API key provided and no DATAMERGE_API_KEY env var`);
           throw new Error(
             'apiKey is required. Provide it as an argument or set DATAMERGE_API_KEY.',
           );
         }
 
+        console.log(`✅ configure_datamerge: Creating client for session ${extra.sessionId}`);
+        // Store the API key for this session
+        this.apiKeys.set(extra.sessionId, key);
         const client = new DataMergeClient({ apiKey: key, baseUrl });
         this.clients.set(extra.sessionId, client);
+        console.log(`✅ configure_datamerge: Client configured successfully for session ${extra.sessionId}`);
 
         return {
           content: [
@@ -476,42 +485,78 @@ export class DataMergeMCPStreamable {
     authHeader: string | undefined,
     sessionId: string,
   ): void {
+    console.log(
+      `🔍 tryConfigureClientFromAuthHeader: sessionId=${sessionId}, hasAuthHeader=${!!authHeader}, authHeaderPrefix=${authHeader?.substring(0, 10) || 'none'}`,
+    );
+    
     if (authHeader && authHeader.startsWith('Token ')) {
       const apiKey = authHeader.substring('Token '.length);
       if (apiKey) {
-        console.log(
-          `🔍 Auto-configuring DataMerge client from Authorization header for session: ${sessionId}`,
-        );
-        try {
-          const client = new DataMergeClient({ apiKey });
-          this.clients.set(sessionId, client);
+        // Store the API key for this session so we can use it later
+        this.apiKeys.set(sessionId, apiKey);
+        console.log(`🔍 Stored API key for session: ${sessionId}`);
+        
+        // Create and store the client if we don't have one yet
+        if (!this.clients.has(sessionId)) {
           console.log(
-            `🔍 DataMerge client auto-configured successfully for session: ${sessionId}`,
+            `🔍 Auto-configuring DataMerge client from Authorization header for session: ${sessionId}`,
           );
-        } catch (error) {
-          console.log(`🔍 Failed to auto-configure DataMerge client:`, error);
+          try {
+            const client = new DataMergeClient({ apiKey });
+            this.clients.set(sessionId, client);
+            console.log(
+              `✅ DataMerge client auto-configured successfully for session: ${sessionId}`,
+            );
+          } catch (error) {
+            console.error(`❌ Failed to auto-configure DataMerge client:`, error);
+          }
         }
+      } else {
+        console.log(`⚠️ Authorization header has 'Token ' prefix but no API key after it`);
       }
+    } else if (authHeader) {
+      console.log(
+        `⚠️ Authorization header present but doesn't start with 'Token ': ${authHeader.substring(0, 20)}...`,
+      );
+    } else {
+      console.log(`ℹ️ No Authorization header provided for session: ${sessionId}`);
     }
   }
 
   private getClientForSession(sessionId?: string): DataMergeClient {
     if (!sessionId) {
+      console.error('❌ getClientForSession called without sessionId');
       throw new Error('Session ID is required');
     }
 
+    console.log(`🔍 getClientForSession: sessionId=${sessionId}, hasClient=${this.clients.has(sessionId)}, hasStoredApiKey=${this.apiKeys.has(sessionId)}`);
+    
     const existing = this.clients.get(sessionId);
     if (existing) {
+      console.log(`✅ Using existing client for session: ${sessionId}`);
       return existing;
     }
 
-    const apiKey = process.env['DATAMERGE_API_KEY'];
+    // Try to get API key from stored session keys first
+    let apiKey = this.apiKeys.get(sessionId);
+    if (apiKey) {
+      console.log(`✅ Found stored API key for session ${sessionId}, creating client...`);
+      const client = new DataMergeClient({ apiKey });
+      this.clients.set(sessionId, client);
+      return client;
+    }
+
+    // Fall back to environment variable
+    console.log(`⚠️ No stored API key for session ${sessionId}, checking env var...`);
+    apiKey = process.env['DATAMERGE_API_KEY'];
     if (!apiKey) {
+      console.error(`❌ No client configured for session ${sessionId}, no stored API key, and no DATAMERGE_API_KEY env var`);
       throw new Error(
         'DataMerge client not configured. Please call configure_datamerge or set DATAMERGE_API_KEY.',
       );
     }
 
+    console.log(`✅ Creating client from DATAMERGE_API_KEY env var for session: ${sessionId}`);
     const client = new DataMergeClient({ apiKey });
     this.clients.set(sessionId, client);
     return client;
@@ -541,10 +586,18 @@ export class DataMergeMCPStreamable {
     // MCP POST endpoint (naked path for dedicated MCP subdomain)
     app.post('/', async (req: Request, res: Response) => {
       const sessionId = req.headers['mcp-session-id'] as string;
-      const authHeader = req.headers.authorization as string | undefined;
+      // Check authorization header (Express normalizes to lowercase, but check both)
+      const authHeader = (req.headers.authorization || req.headers['Authorization'] || req.headers['x-api-key']) as string | undefined;
       
-      console.log('🔍 MCP POST request for session:', sessionId);
-      console.log('🔍 Request body:', req.body);
+      console.log('🔍 ===== MCP POST REQUEST =====');
+      console.log('🔍 Session ID:', sessionId);
+      console.log('🔍 All headers:', JSON.stringify(Object.keys(req.headers), null, 2));
+      console.log('🔍 Authorization header present:', !!authHeader);
+      if (authHeader) {
+        console.log('🔍 Authorization header value (first 30 chars):', authHeader.substring(0, 30));
+      }
+      console.log('🔍 Request body method:', req.body?.method);
+      console.log('🔍 Request body params (keys):', req.body?.params ? Object.keys(req.body.params) : 'none');
       
       try {
         let transport: StreamableHTTPServerTransport;
@@ -574,6 +627,7 @@ export class DataMergeMCPStreamable {
               console.log(`🔍 Transport closed for session ${sid}, removing from transports map`);
               this.transports.delete(sid);
               this.clients.delete(sid);
+              this.apiKeys.delete(sid); // Clean up stored API key
             }
           };
 
