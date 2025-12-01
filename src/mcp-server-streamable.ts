@@ -489,34 +489,39 @@ export class DataMergeMCPStreamable {
       `🔍 tryConfigureClientFromAuthHeader: sessionId=${sessionId}, hasAuthHeader=${!!authHeader}, authHeaderPrefix=${authHeader?.substring(0, 10) || 'none'}`,
     );
     
-    if (authHeader && authHeader.startsWith('Token ')) {
-      const apiKey = authHeader.substring('Token '.length);
-      if (apiKey) {
-        // Store the API key for this session so we can use it later
-        this.apiKeys.set(sessionId, apiKey);
-        console.log(`🔍 Stored API key for session: ${sessionId}`);
-        
-        // Create and store the client if we don't have one yet
-        if (!this.clients.has(sessionId)) {
+    // Accept both "Bearer" and "Token" schemes - Agent Builder sends Bearer, but we use Token for DataMerge API
+    let apiKey: string | undefined;
+    if (authHeader) {
+      if (authHeader.startsWith('Bearer ')) {
+        apiKey = authHeader.substring('Bearer '.length);
+      } else if (authHeader.startsWith('Token ')) {
+        apiKey = authHeader.substring('Token '.length);
+      }
+    }
+
+    if (apiKey && apiKey.trim()) {
+      // Store the API key for this session so we can use it later
+      this.apiKeys.set(sessionId, apiKey.trim());
+      console.log(`🔍 Stored API key for session: ${sessionId}`);
+      
+      // Create and store the client if we don't have one yet
+      if (!this.clients.has(sessionId)) {
+        console.log(
+          `🔍 Auto-configuring DataMerge client from Authorization header for session: ${sessionId}`,
+        );
+        try {
+          const client = new DataMergeClient({ apiKey: apiKey.trim() });
+          this.clients.set(sessionId, client);
           console.log(
-            `🔍 Auto-configuring DataMerge client from Authorization header for session: ${sessionId}`,
+            `✅ DataMerge client auto-configured successfully for session: ${sessionId}`,
           );
-          try {
-            const client = new DataMergeClient({ apiKey });
-            this.clients.set(sessionId, client);
-            console.log(
-              `✅ DataMerge client auto-configured successfully for session: ${sessionId}`,
-            );
-          } catch (error) {
-            console.error(`❌ Failed to auto-configure DataMerge client:`, error);
-          }
+        } catch (error) {
+          console.error(`❌ Failed to auto-configure DataMerge client:`, error);
         }
-      } else {
-        console.log(`⚠️ Authorization header has 'Token ' prefix but no API key after it`);
       }
     } else if (authHeader) {
       console.log(
-        `⚠️ Authorization header present but doesn't start with 'Token ': ${authHeader.substring(0, 20)}...`,
+        `⚠️ Authorization header present but doesn't start with 'Bearer ' or 'Token ': ${authHeader.substring(0, 30)}...`,
       );
     } else {
       console.log(`ℹ️ No Authorization header provided for session: ${sessionId}`);
