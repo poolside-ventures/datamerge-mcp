@@ -469,6 +469,32 @@ export class DataMergeMCPStreamable {
     );
   }
 
+  /**
+   * Extract API key from Authorization header and configure client for session if present
+   */
+  private tryConfigureClientFromAuthHeader(
+    authHeader: string | undefined,
+    sessionId: string,
+  ): void {
+    if (authHeader && authHeader.startsWith('Token ')) {
+      const apiKey = authHeader.substring('Token '.length);
+      if (apiKey) {
+        console.log(
+          `🔍 Auto-configuring DataMerge client from Authorization header for session: ${sessionId}`,
+        );
+        try {
+          const client = new DataMergeClient({ apiKey });
+          this.clients.set(sessionId, client);
+          console.log(
+            `🔍 DataMerge client auto-configured successfully for session: ${sessionId}`,
+          );
+        } catch (error) {
+          console.log(`🔍 Failed to auto-configure DataMerge client:`, error);
+        }
+      }
+    }
+  }
+
   private getClientForSession(sessionId?: string): DataMergeClient {
     if (!sessionId) {
       throw new Error('Session ID is required');
@@ -515,6 +541,7 @@ export class DataMergeMCPStreamable {
     // MCP POST endpoint (naked path for dedicated MCP subdomain)
     app.post('/', async (req: Request, res: Response) => {
       const sessionId = req.headers['mcp-session-id'] as string;
+      const authHeader = req.headers.authorization as string | undefined;
       
       console.log('🔍 MCP POST request for session:', sessionId);
       console.log('🔍 Request body:', req.body);
@@ -522,7 +549,8 @@ export class DataMergeMCPStreamable {
       try {
         let transport: StreamableHTTPServerTransport;
         if (sessionId && this.transports.has(sessionId)) {
-          // Reuse existing transport
+          // Reuse existing transport - check for Authorization header to auto-configure client
+          this.tryConfigureClientFromAuthHeader(authHeader, sessionId);
           transport = this.transports.get(sessionId)!;
         } else if (!sessionId && isInitializeRequest(req.body)) {
           // New initialization request
@@ -535,26 +563,7 @@ export class DataMergeMCPStreamable {
               this.transports.set(sessionId, transport!);
               
               // Check for Authorization header and auto-configure if present
-              const authHeader = req.headers.authorization;
-              if (authHeader && authHeader.startsWith('Token ')) {
-                const apiKey = authHeader.substring('Token '.length);
-                console.log(
-                  `🔍 Auto-configuring DataMerge client with Authorization header for session: ${sessionId}`,
-                );
-                try {
-                  const client = new DataMergeClient({ apiKey });
-                  this.clients.set(sessionId, client);
-                  console.log(
-                    `🔍 DataMerge client auto-configured successfully for session: ${sessionId}`,
-                  );
-                } catch (error) {
-                  console.log(`🔍 Failed to auto-configure DataMerge client:`, error);
-                }
-              } else {
-                console.log(
-                  `🔍 No Authorization header with Token scheme provided for session: ${sessionId} - client will need to be configured later`,
-                );
-              }
+              this.tryConfigureClientFromAuthHeader(authHeader, sessionId);
             }
           });
 
@@ -605,6 +614,7 @@ export class DataMergeMCPStreamable {
     // MCP GET endpoint for SSE streams (naked path for dedicated MCP subdomain)
     app.get('/', async (req: Request, res: Response) => {
       const sessionId = req.headers['mcp-session-id'] as string;
+      const authHeader = req.headers.authorization as string | undefined;
       
       console.log('🔍 MCP GET request for session:', sessionId);
       
@@ -612,6 +622,9 @@ export class DataMergeMCPStreamable {
         res.status(400).send('Invalid or missing session ID');
         return;
       }
+
+      // Check for Authorization header and auto-configure client if present
+      this.tryConfigureClientFromAuthHeader(authHeader, sessionId);
 
       // Check for Last-Event-ID header for resumability
       const lastEventId = req.headers['last-event-id'] as string;
