@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "datamerge": {
+      "command": "npx",
+      "args": ["@datamerge/mcp"],
+      "env": {
+        "DATAMERGE_API_KEY": "your_datamerge_api_key_here"
+      }
+    }
+  }
+}
