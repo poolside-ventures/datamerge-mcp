@@ -11,10 +11,19 @@ export class DataMergeMCPServer {
   private client: DataMergeClient | null = null;
 
   constructor() {
-    this.server = new Server({
-      name: 'datamerge-mcp',
-      version: '1.0.0',
-    });
+    this.server = new Server(
+      {
+        name: 'datamerge-mcp',
+        version: '1.0.0',
+      },
+      {
+        // Explicitly declare tool capabilities so the MCP SDK
+        // allows registering tools/list and tools/call handlers.
+        capabilities: {
+          tools: {},
+        },
+      },
+    );
 
     this.setupToolHandlers();
   }

@@ -83,7 +83,7 @@ export interface CompanyEnrichRequestV1 {
 export interface CompanyEnrichJobV1 {
   id: string;
   status: string;
-  created_at: string;
+  created_at?: string | undefined;
   updated_at?: string | undefined;
   results?: CompanyRecordV1[] | undefined;
   [key: string]: unknown;
