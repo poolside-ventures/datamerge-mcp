@@ -407,17 +407,12 @@ export class DataMergeMCPServer {
         status === 'cancelled';
 
       if (isCompleted) {
-        const resultSummary = firstResult
-          ? `\n\nFirst result:\n- Name: ${firstResult.name}\n- Domain: ${
-              firstResult.domain ?? 'n/a'
-            }\n- Country: ${firstResult.country_code ?? 'n/a'}`
-          : '\n\nJob completed but no results were returned.';
-
+        // Return full job data as JSON including all results
         return {
           content: [
             {
               type: 'text',
-              text: `Enrichment job completed.\n\nJob ID: ${job.id}\nStatus: ${job.status}${resultSummary}`,
+              text: JSON.stringify(job, null, 2),
             },
           ],
         };
@@ -475,17 +470,13 @@ export class DataMergeMCPServer {
     }
 
     const job = response.job;
-    const firstResult = job.results?.[0];
-    const resultSummary =
-      firstResult
-        ? `\n\nFirst result:\n- Name: ${firstResult.name}\n- Domain: ${firstResult.domain ?? 'n/a'}\n- Country: ${firstResult.country_code ?? 'n/a'}`
-        : '\n\nNo results yet.';
-
+    
+    // Return full job data as JSON including all results
     return {
       content: [
         {
           type: 'text',
-          text: `Enrichment job status.\n\nJob ID: ${job.id}\nStatus: ${job.status}${resultSummary}`,
+          text: JSON.stringify(job, null, 2),
         },
       ],
     };
@@ -516,9 +507,7 @@ export class DataMergeMCPServer {
       content: [
         {
           type: 'text',
-          text: `Company details:\n\nName: ${company.name}\nDomain: ${
-            company.domain ?? 'n/a'
-          }\nCountry: ${company.country_code ?? 'n/a'}\nID: ${company.id}`,
+          text: JSON.stringify(company, null, 2),
         },
       ],
     };
@@ -545,20 +534,13 @@ export class DataMergeMCPServer {
     }
 
     const { company, parents = [], children = [] } = response;
-    const parentsSummary =
-      parents.length > 0
-        ? parents.map((p) => `- ${p.name} (${p.id})`).join('\n')
-        : 'None';
-    const childrenSummary =
-      children.length > 0
-        ? children.map((c) => `- ${c.name} (${c.id})`).join('\n')
-        : 'None';
-
+    
+    // Return full hierarchy data as JSON
     return {
       content: [
         {
           type: 'text',
-          text: `Hierarchy for company ${company.name} (${company.id}):\n\nParents:\n${parentsSummary}\n\nChildren:\n${childrenSummary}`,
+          text: JSON.stringify({ company, parents, children }, null, 2),
         },
       ],
     };
