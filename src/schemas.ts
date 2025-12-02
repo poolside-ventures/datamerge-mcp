@@ -26,7 +26,10 @@ const CompanyEnrichRequestBaseSchema = z
     country_code: z.union([z.string(), z.array(z.string())]).optional(),
     strict_match: z.boolean().optional(),
     global_ultimate: z.boolean().optional(),
-    webhook_url: z.string().url().optional(),
+    webhook_url: z
+      .union([z.string().url(), z.literal('')])
+      .optional()
+      .transform((val) => (val === '' ? undefined : val)),
   })
   .catchall(z.unknown());
 

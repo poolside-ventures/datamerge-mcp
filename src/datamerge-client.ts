@@ -228,6 +228,17 @@ export class DataMergeClient {
       }
     }
     
+    // Remove empty string values - convert to undefined/omit
+    if (apiRequest.webhook_url === '' || apiRequest.webhook_url === undefined) {
+      delete apiRequest.webhook_url;
+    }
+    if (apiRequest.company_name === '' || apiRequest.company_name === undefined) {
+      delete apiRequest.company_name;
+    }
+    if (apiRequest.domain === '' || apiRequest.domain === undefined) {
+      delete apiRequest.domain;
+    }
+    
     const response = await this.client.post('/v1/company/enrich', apiRequest);
     return this.mapEnrichResponse(response.data);
   }
