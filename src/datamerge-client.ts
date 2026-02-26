@@ -86,7 +86,7 @@ export class DataMergeClient {
         : '';
     const name =
       (raw &&
-        (raw.display_name || raw.legal_name || raw.name || raw.domain || 'Unknown')) ??
+        (raw.display_name || raw.legal_name || raw.name || raw.company_name || raw.domain || 'Unknown')) ??
       'Unknown';
 
     const base: CompanyRecordV1 = {
@@ -332,11 +332,18 @@ export class DataMergeClient {
       mappedResults.find((r: any) => r.id === requestedId || (r as any).datamerge_id === requestedId) ??
       mappedResults[0];
     const others = primary ? mappedResults.filter((r: any) => r !== primary) : mappedResults;
+    const primaryLevel =
+      (primary as any)?.hierarchy_level ?? (primary as any)?.level ?? 0;
+    const getLevel = (r: any) => r.hierarchy_level ?? r.level ?? -1;
+    const parents = others
+      .filter((r: any) => getLevel(r) < primaryLevel)
+      .sort((a: any, b: any) => getLevel(a) - getLevel(b));
+    const children = others.filter((r: any) => getLevel(r) > primaryLevel);
     return {
       success: true,
       company: primary ?? ({} as CompanyRecordV1),
-      parents: [],
-      children: others,
+      parents,
+      children,
       results: mappedResults,
       total_count: data?.total_count,
       results_count: data?.results_count ?? mappedResults.length,
