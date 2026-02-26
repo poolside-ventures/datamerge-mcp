@@ -6,15 +6,33 @@ import {
   CompanyEnrichResponseV1,
   CompanyGetParamsV1,
   CompanyGetResponseV1,
+  CompanyHierarchyParamsV1,
   CompanyHierarchyResponseV1,
   CompanyRecordV1,
+  ContactEnrichRequestV1,
+  ContactGetResponseV1,
+  ContactJobResponseV1,
+  ContactRecordV1,
+  ContactSearchRequestV1,
+  CreditsBalanceResponseV1,
   DataMergeConfig,
+  ListCreateRequestV1,
+  ListItemsParamsV1,
+  ListRecordV1,
+  LookalikeJobResponseV1,
+  LookalikeRequestV1,
   StatusResponseV1,
 } from './types.js';
 import {
   CompanyEnrichRequestV1Schema,
   CompanyGetParamsV1Schema,
+  CompanyHierarchyParamsV1Schema,
+  ContactEnrichRequestV1Schema,
+  ContactSearchRequestV1Schema,
   DataMergeConfigSchema,
+  ListCreateRequestV1Schema,
+  ListItemsParamsV1Schema,
+  LookalikeRequestV1Schema,
 } from './schemas.js';
 
 /**
@@ -128,7 +146,7 @@ export class DataMergeClient {
   }
 
   /**
-   * Map the current /v1/job/{job_id}/status response into ApiResponse<StatusResponseV1>.
+   * Map enrichment job status response (e.g. /v1/company/enrich/{job_id}/status or /v1/job/{job_id}/status).
    */
   private mapStatusResponse(
     raw: any,
@@ -149,11 +167,13 @@ export class DataMergeClient {
       const resultsSource: any[] =
         (result && Array.isArray(result.results) && result.results) || [];
       const mappedResults = resultsSource.map((r) => this.mapCompanyRecord(r));
+      const recordIds = result?.record_ids ?? raw?.record_ids;
 
       const job: CompanyEnrichJobV1 = {
         id: jobId,
         status,
         results: mappedResults,
+        ...(Array.isArray(recordIds) && recordIds.length > 0 ? { record_ids: recordIds } : {}),
       };
 
       return {
@@ -245,38 +265,336 @@ export class DataMergeClient {
 
   /**
    * Get the status of an enrichment job.
+   * GET /v1/company/enrich/{job_id}/status — poll until status is "completed" or "failed". Response includes record_ids.
    */
   async getCompanyEnrichmentResult(jobId: string): Promise<ApiResponse<StatusResponseV1>> {
     if (!jobId) {
       throw new Error('job_id is required');
     }
-    const response = await this.client.get(`/v1/job/${encodeURIComponent(jobId)}/status`);
+    const response = await this.client.get(
+      `/v1/company/enrich/${encodeURIComponent(jobId)}/status`,
+    );
     return this.mapStatusResponse(response.data);
   }
 
   /**
    * Get a single company record.
+   * GET /v1/company/get?datamerge_id={id} or ?record_id={uuid}. Provide either datamerge_id (charges 1 credit) or record_id (free). Not both. Optional: add_to_list (list slug, only with datamerge_id).
    */
   async getCompany(
     params: CompanyGetParamsV1,
   ): Promise<ApiResponse<CompanyGetResponseV1>> {
-    const validated = CompanyGetParamsV1Schema.parse(params);
-    const response = await this.client.get('/v1/company/get', { params: validated });
+    const validated = CompanyGetParamsV1Schema.parse(params) as CompanyGetParamsV1;
+    const apiParams: Record<string, string> = {};
+    if (validated.datamerge_id) apiParams['datamerge_id'] = validated.datamerge_id;
+    if (validated.record_id) apiParams['record_id'] = validated.record_id;
+    if (validated.add_to_list) apiParams['add_to_list'] = validated.add_to_list;
+    const response = await this.client.get('/v1/company/get', { params: apiParams });
     return this.mapCompanyGetResponse(response.data);
   }
 
   /**
    * Get the corporate hierarchy for a company.
+   * GET /v1/company/hierarchy?datamerge_id={id}. Get all entities in the same global ultimate hierarchy. Optional: include_names (bool, charges 1 credit), include_branches, only_subsidiaries, max_level (int), country_code (array), page (int).
    */
   async getCompanyHierarchy(
-    params: CompanyGetParamsV1,
+    params: CompanyHierarchyParamsV1,
   ): Promise<ApiResponse<CompanyHierarchyResponseV1>> {
-    const validated = CompanyGetParamsV1Schema.parse(params);
+    const validated = CompanyHierarchyParamsV1Schema.parse(params) as CompanyHierarchyParamsV1;
     const response = await this.client.get<ApiResponse<CompanyHierarchyResponseV1>>(
       '/v1/company/hierarchy',
       { params: validated },
     );
     return response.data;
+  }
+
+  // -------------------------------------------------------------------------
+  // Lookalike API
+  // -------------------------------------------------------------------------
+
+  /**
+   * Start a lookalike companies job (POST /v1/company/lookalike). Returns job_id.
+   */
+  async startLookalike(
+    request: LookalikeRequestV1,
+  ): Promise<ApiResponse<LookalikeJobResponseV1>> {
+    const validated = LookalikeRequestV1Schema.parse(request);
+    const response = await this.client.post('/v1/company/lookalike', validated);
+    const data = response.data as any;
+    if (data?.error) {
+      return { success: false, error: String(data.error) } as ApiResponse<LookalikeJobResponseV1>;
+    }
+    return {
+      success: true,
+      job_id: String(data.job_id ?? data.id ?? ''),
+      status: String(data.status ?? 'queued'),
+      message: data.message,
+      record_ids: data.record_ids,
+    };
+  }
+
+  /**
+   * Get lookalike job status (GET /v1/company/lookalike/{job_id}/status).
+   */
+  async getLookalikeStatus(
+    jobId: string,
+  ): Promise<ApiResponse<LookalikeJobResponseV1>> {
+    if (!jobId) throw new Error('job_id is required');
+    const response = await this.client.get(
+      `/v1/company/lookalike/${encodeURIComponent(jobId)}/status`,
+    );
+    const data = response.data as any;
+    if (data?.error) {
+      return { success: false, error: String(data.error) } as ApiResponse<LookalikeJobResponseV1>;
+    }
+    return {
+      success: true,
+      job_id: String(data.job_id ?? data.id ?? jobId),
+      status: String(data.status ?? ''),
+      message: data.message,
+      record_ids: data.record_ids,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Contact API
+  // -------------------------------------------------------------------------
+
+  /**
+   * Search for contacts at companies (POST /v1/contact/search). Returns job_id.
+   */
+  async contactSearch(
+    request: ContactSearchRequestV1,
+  ): Promise<ApiResponse<ContactJobResponseV1>> {
+    const validated = ContactSearchRequestV1Schema.parse(request);
+    const response = await this.client.post('/v1/contact/search', validated);
+    const data = response.data as any;
+    if (data?.error) {
+      return { success: false, error: String(data.error) } as ApiResponse<ContactJobResponseV1>;
+    }
+    return {
+      success: true,
+      job_id: String(data.job_id ?? data.id ?? ''),
+      status: String(data.status ?? 'queued'),
+      record_ids: data.record_ids,
+      type: data.type,
+      message: data.message,
+    };
+  }
+
+  /**
+   * Get contact search job status (GET /v1/contact/search/{job_id}/status).
+   */
+  async getContactSearchStatus(
+    jobId: string,
+  ): Promise<ApiResponse<ContactJobResponseV1>> {
+    if (!jobId) throw new Error('job_id is required');
+    const response = await this.client.get(
+      `/v1/contact/search/${encodeURIComponent(jobId)}/status`,
+    );
+    const data = response.data as any;
+    if (data?.error) {
+      return { success: false, error: String(data.error) } as ApiResponse<ContactJobResponseV1>;
+    }
+    return {
+      success: true,
+      job_id: String(data.job_id ?? data.id ?? jobId),
+      status: String(data.status ?? ''),
+      record_ids: data.record_ids,
+      type: data.type,
+      message: data.message,
+    };
+  }
+
+  /**
+   * Enrich contacts by LinkedIn URL or name+domain (POST /v1/contact/enrich). Returns job_id.
+   */
+  async contactEnrich(
+    request: ContactEnrichRequestV1,
+  ): Promise<ApiResponse<ContactJobResponseV1>> {
+    const validated = ContactEnrichRequestV1Schema.parse(request);
+    const response = await this.client.post('/v1/contact/enrich', validated);
+    const data = response.data as any;
+    if (data?.error) {
+      return { success: false, error: String(data.error) } as ApiResponse<ContactJobResponseV1>;
+    }
+    return {
+      success: true,
+      job_id: String(data.job_id ?? data.id ?? ''),
+      status: String(data.status ?? 'queued'),
+      record_ids: data.record_ids,
+      type: data.type,
+      message: data.message,
+    };
+  }
+
+  /**
+   * Get contact enrichment job status (GET /v1/contact/enrich/{job_id}/status).
+   */
+  async getContactEnrichStatus(
+    jobId: string,
+  ): Promise<ApiResponse<ContactJobResponseV1>> {
+    if (!jobId) throw new Error('job_id is required');
+    const response = await this.client.get(
+      `/v1/contact/enrich/${encodeURIComponent(jobId)}/status`,
+    );
+    const data = response.data as any;
+    if (data?.error) {
+      return { success: false, error: String(data.error) } as ApiResponse<ContactJobResponseV1>;
+    }
+    return {
+      success: true,
+      job_id: String(data.job_id ?? data.id ?? jobId),
+      status: String(data.status ?? ''),
+      record_ids: data.record_ids,
+      type: data.type,
+      message: data.message,
+    };
+  }
+
+  /**
+   * Get a contact by record_id (GET /v1/contact/get). Does not charge credits.
+   */
+  async getContact(recordId: string): Promise<ApiResponse<ContactGetResponseV1>> {
+    if (!recordId) throw new Error('record_id is required');
+    const response = await this.client.get('/v1/contact/get', {
+      params: { record_id: recordId },
+    });
+    const data = response.data as any;
+    if (data?.error) {
+      return { success: false, error: String(data.error) } as ApiResponse<ContactGetResponseV1>;
+    }
+    const record = data?.record ?? data?.contact ?? data;
+    return {
+      success: !!data?.success,
+      record: record as ContactRecordV1,
+      contact: record as ContactRecordV1,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Lists API
+  // -------------------------------------------------------------------------
+
+  /**
+   * Get all lists (GET /v1/lists). Optional object_type: company | contact.
+   */
+  async listLists(objectType?: 'company' | 'contact'): Promise<{
+    success: boolean;
+    lists?: ListRecordV1[];
+    error?: string;
+  }> {
+    try {
+      const params = objectType ? { object_type: objectType } : {};
+      const response = await this.client.get('/v1/lists', { params });
+      const data = response.data as any;
+      if (data?.error) {
+        return { success: false, error: String(data.error) };
+      }
+      return {
+        success: true,
+        lists: Array.isArray(data.lists) ? data.lists : Array.isArray(data) ? data : [],
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.response?.data ? JSON.stringify(err.response.data) : err.message,
+      };
+    }
+  }
+
+  /**
+   * Create a list (POST /v1/lists).
+   */
+  async createList(
+    request: ListCreateRequestV1,
+  ): Promise<{ success: boolean; list?: ListRecordV1; error?: string }> {
+    const validated = ListCreateRequestV1Schema.parse(request);
+    const response = await this.client.post('/v1/lists', validated);
+    const data = response.data as any;
+    if (data?.error) {
+      return { success: false, error: String(data.error) };
+    }
+    return { success: true, list: data?.list ?? data };
+  }
+
+  /**
+   * Get list items (GET /v1/lists/{object_type}/{list_slug}).
+   */
+  async getListItems(
+    objectType: 'company' | 'contact',
+    listSlug: string,
+    params?: ListItemsParamsV1,
+  ): Promise<{ success: boolean; items?: unknown[]; error?: string }> {
+    const validated = params ? ListItemsParamsV1Schema.parse(params) : {};
+    const response = await this.client.get(
+      `/v1/lists/${encodeURIComponent(objectType)}/${encodeURIComponent(listSlug)}`,
+      { params: validated },
+    );
+    const data = response.data as any;
+    if (data?.error) {
+      return { success: false, error: String(data.error) };
+    }
+    return {
+      success: true,
+      items: data?.items ?? data?.results ?? data?.data ?? [],
+    };
+  }
+
+  /**
+   * Remove an item from a list (DELETE /v1/lists/{object_type}/{list_slug}/{item_id}).
+   */
+  async removeListItem(
+    objectType: 'company' | 'contact',
+    listSlug: string,
+    itemId: string,
+  ): Promise<{ success: boolean; error?: string }> {
+    await this.client.delete(
+      `/v1/lists/${encodeURIComponent(objectType)}/${encodeURIComponent(listSlug)}/${encodeURIComponent(itemId)}`,
+    );
+    return { success: true };
+  }
+
+  /**
+   * Delete a list (DELETE /v1/lists/{object_type}/{list_slug}). System lists cannot be deleted.
+   */
+  async deleteList(
+    objectType: 'company' | 'contact',
+    listSlug: string,
+  ): Promise<{ success: boolean; error?: string }> {
+    await this.client.delete(
+      `/v1/lists/${encodeURIComponent(objectType)}/${encodeURIComponent(listSlug)}`,
+    );
+    return { success: true };
+  }
+
+  // -------------------------------------------------------------------------
+  // Account / Credits API
+  // -------------------------------------------------------------------------
+
+  /**
+   * Get credits balance (GET /v1/credits/balance).
+   */
+  async getCreditsBalance(): Promise<
+    ApiResponse<CreditsBalanceResponseV1>
+  > {
+    try {
+      const response = await this.client.get('/v1/credits/balance');
+      const data = response.data as any;
+      if (data?.error) {
+        return { success: false, error: String(data.error) } as ApiResponse<CreditsBalanceResponseV1>;
+      }
+      return {
+        success: true,
+        credits_balance: data.credits_balance ?? data.balances?.total ?? 0,
+        balances: data.balances,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.response?.data ? JSON.stringify(err.response.data) : err.message,
+      } as ApiResponse<CreditsBalanceResponseV1>;
+    }
   }
 
   /**

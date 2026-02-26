@@ -35,14 +35,18 @@ describe('DataMerge API Schemas', () => {
   });
 
   describe('CompanyGetParamsV1Schema', () => {
-    it('should require at least one identifier', () => {
-      const invalid = {};
-      const result = CompanyGetParamsV1Schema.safeParse(invalid);
-      expect(result.success).toBe(false);
+    it('should require exactly one of datamerge_id or record_id (not both)', () => {
+      const invalidEmpty = {};
+      expect(CompanyGetParamsV1Schema.safeParse(invalidEmpty).success).toBe(false);
 
-      const withId = { company_id: 'cmp_123' };
-      const ok1 = CompanyGetParamsV1Schema.safeParse(withId);
-      expect(ok1.success).toBe(true);
+      const invalidBoth = { datamerge_id: 'DM123', record_id: 'uuid' };
+      expect(CompanyGetParamsV1Schema.safeParse(invalidBoth).success).toBe(false);
+
+      const withDatamergeId = { datamerge_id: 'DM123' };
+      expect(CompanyGetParamsV1Schema.safeParse(withDatamergeId).success).toBe(true);
+
+      const withRecordId = { record_id: 'uuid-here' };
+      expect(CompanyGetParamsV1Schema.safeParse(withRecordId).success).toBe(true);
     });
   });
 

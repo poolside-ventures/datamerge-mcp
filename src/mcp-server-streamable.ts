@@ -79,7 +79,7 @@ export class DataMergeMCPStreamable {
       {
         title: 'Start Company Enrichment',
         description:
-          'Start a company enrichment job using the DataMerge Company API (POST /v1/company/enrich).',
+          'POST /v1/company/enrich. Enrich one or more companies by domain. Returns a job_id (async). Single: domain. Batch: domains, country_code, global_ultimate, list, skip_if_exists.',
         inputSchema: {
           domain: z.string().optional().describe('Company website domain (e.g. example.com).'),
           company_name: z
@@ -102,6 +102,9 @@ export class DataMergeMCPStreamable {
             .string()
             .optional()
             .describe('Optional webhook URL to receive job completion notifications.'),
+          domains: z.array(z.string()).optional().describe('Batch: multiple domains to enrich.'),
+          list: z.string().optional().describe('List slug to add enriched companies to.'),
+          skip_if_exists: z.boolean().optional().describe('Skip domains already in list.'),
         },
       },
       async (args, extra) => {
@@ -142,7 +145,7 @@ export class DataMergeMCPStreamable {
       {
         title: 'Get Company Enrichment Result',
         description:
-          'Get the status and results of a company enrichment job (GET /v1/job/{job_id}/status).',
+          'GET /v1/company/enrich/{job_id}/status. Poll until status is "completed" or "failed". Response includes record_ids. Status values: queued · processing · completed · failed.',
         inputSchema: {
           job_id: z.string().describe('The enrichment job ID returned by start_company_enrichment.'),
         },
@@ -191,7 +194,7 @@ export class DataMergeMCPStreamable {
       {
         title: 'Start Company Enrichment and Wait',
         description:
-          'Start a company enrichment job and poll its status until completion or timeout.',
+          'POST /v1/company/enrich then poll GET /v1/company/enrich/{job_id}/status until status is "completed" or "failed" or timeout. Same params as start_company_enrichment plus poll_interval_seconds and timeout_seconds.',
       inputSchema: {
           domain: z.string().optional().describe('Company website domain (e.g. example.com).'),
           company_name: z
@@ -222,6 +225,9 @@ export class DataMergeMCPStreamable {
             .number()
             .optional()
             .describe('Maximum time to wait for completion (in seconds). Defaults to 60 seconds.'),
+          domains: z.array(z.string()).optional().describe('Batch: multiple domains to enrich.'),
+          list: z.string().optional().describe('List slug to add enriched companies to.'),
+          skip_if_exists: z.boolean().optional().describe('Skip domains already in list.'),
         },
       },
       async (args, extra) => {
@@ -340,22 +346,22 @@ export class DataMergeMCPStreamable {
       },
     );
 
-    // Get company
+    // Get company — doc: provide either datamerge_id or record_id. Not both. Optional add_to_list (only with datamerge_id).
     this.server.registerTool(
       'get_company',
       {
         title: 'Get Company',
-        description: 'Get a single company record (GET /v1/company/get).',
+        description:
+          'Get a single company record. GET /v1/company/get?datamerge_id={id} or ?record_id={uuid}. Provide either datamerge_id (charges 1 credit) or record_id (free). Not both. Optional: add_to_list — list slug to add the company to (only with datamerge_id).',
       inputSchema: {
-          company_id: z.string().optional().describe('DataMerge company ID.'),
-          domain: z.string().optional().describe('Company domain (e.g. example.com).'),
-          company_name: z.string().optional().describe('Company name.'),
-          country_code: z.string().optional().describe('Optional ISO 2-letter country code.'),
+          datamerge_id: z.string().optional().describe('DataMerge company ID. Charges 1 credit.'),
+          record_id: z.string().optional().describe('Your record UUID from previous enrichment. Free.'),
+          add_to_list: z.string().optional().describe('List slug to add the company to. Only valid with datamerge_id.'),
         },
       },
       async (args, extra) => {
         const client = this.getClientForSession(extra.sessionId);
-        const response = await client.getCompany(args ?? {});
+        const response = await client.getCompany((args ?? {}) as import('./types.js').CompanyGetParamsV1);
 
         if (!response.success) {
           const errorMessage =
@@ -385,23 +391,44 @@ export class DataMergeMCPStreamable {
       },
     );
 
-    // Get company hierarchy
+    // Get company hierarchy — doc: GET /v1/company/hierarchy?datamerge_id={id}. Optional: include_names, include_branches, only_subsidiaries, max_level, country_code (array), page.
     this.server.registerTool(
       'get_company_hierarchy',
       {
         title: 'Get Company Hierarchy',
         description:
-          'Get the corporate hierarchy (parents/children) for a company (GET /v1/company/hierarchy).',
+          'Get all entities in the same global ultimate hierarchy. GET /v1/company/hierarchy?datamerge_id={id}. Parameters: include_names (bool, charges 1 credit), include_branches (bool), only_subsidiaries (bool), max_level (int), country_code (array), page (int).',
       inputSchema: {
-          company_id: z.string().optional().describe('DataMerge company ID.'),
-          domain: z.string().optional().describe('Company domain (e.g. example.com).'),
-          company_name: z.string().optional().describe('Company name.'),
-          country_code: z.string().optional().describe('Optional ISO 2-letter country code.'),
+          datamerge_id: z.string().min(1).describe('DataMerge company ID. Required.'),
+          include_names: z.boolean().optional().describe('Include entity names. Charges 1 credit.'),
+          include_branches: z.boolean().optional().describe('Include branch entities.'),
+          only_subsidiaries: z.boolean().optional().describe('Return only subsidiaries.'),
+          max_level: z.number().int().optional().describe('Maximum hierarchy depth.'),
+          country_code: z.array(z.string()).optional().describe('Filter by country code(s).'),
+          page: z.number().int().optional().describe('Page number for pagination.'),
         },
       },
       async (args, extra) => {
         const client = this.getClientForSession(extra.sessionId);
-        const response = await client.getCompanyHierarchy(args ?? {});
+        const a = args as {
+          datamerge_id: string;
+          include_names?: boolean;
+          include_branches?: boolean;
+          only_subsidiaries?: boolean;
+          max_level?: number;
+          country_code?: string[];
+          page?: number;
+        };
+        const params: import('./types.js').CompanyHierarchyParamsV1 = {
+          datamerge_id: a.datamerge_id,
+        };
+        if (a.include_names !== undefined) params.include_names = a.include_names;
+        if (a.include_branches !== undefined) params.include_branches = a.include_branches;
+        if (a.only_subsidiaries !== undefined) params.only_subsidiaries = a.only_subsidiaries;
+        if (a.max_level !== undefined) params.max_level = a.max_level;
+        if (a.country_code !== undefined) params.country_code = a.country_code;
+        if (a.page !== undefined) params.page = a.page;
+        const response = await client.getCompanyHierarchy(params);
 
         if (!response.success) {
           const errorMessage =
@@ -433,12 +460,354 @@ export class DataMergeMCPStreamable {
       },
     );
 
+    // Lookalike
+    this.server.registerTool(
+      'start_lookalike',
+      {
+        title: 'Start Lookalike',
+        description: 'POST /v1/company/lookalike. Find similar companies using seed domains. Returns a job_id (async, 202). Poll GET /v1/company/lookalike/{job_id}/status until completed or failed.',
+        inputSchema: {
+          companiesFilters: z.record(z.any()).describe('Filters: lookalikeDomains, primaryLocations, companySizes, revenues, yearFounded.'),
+          size: z.number().optional().describe('Max number of lookalikes (e.g. 50).'),
+          list: z.string().optional().describe('List slug to add results to.'),
+          exclude_all: z.boolean().optional().describe('Exclude companies already in list.'),
+        },
+      },
+      async (args, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        const response = await client.startLookalike((args ?? {}) as import('./types.js').LookalikeRequestV1);
+        if (!response.success || 'error' in response) {
+          return {
+            content: [{ type: 'text', text: `Lookalike failed: ${(response as any).error}` }],
+            isError: true,
+          };
+        }
+        const r = response as { job_id: string; status: string; message?: string };
+        return {
+          content: [
+            { type: 'text', text: `Started lookalike job.\n\nJob ID: ${r.job_id}\nStatus: ${r.status}${r.message ? `\n${r.message}` : ''}` },
+          ],
+        };
+      },
+    );
+
+    this.server.registerTool(
+      'get_lookalike_status',
+      {
+        title: 'Get Lookalike Status',
+        description: 'GET /v1/company/lookalike/{job_id}/status. Poll until status is "completed" or "failed". Response includes record_ids.',
+        inputSchema: { job_id: z.string().describe('Lookalike job ID.') },
+      },
+      async ({ job_id }, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        if (!job_id) throw new Error('job_id is required');
+        const response = await client.getLookalikeStatus(job_id);
+        if (!response.success || 'error' in response) {
+          return {
+            content: [{ type: 'text', text: `Failed: ${(response as any).error}` }],
+            isError: true,
+          };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(response, null, 2) }] };
+      },
+    );
+
+    // Contact search
+    this.server.registerTool(
+      'contact_search',
+      {
+        title: 'Contact Search',
+        description: 'POST /v1/contact/search. Search for contacts at specified companies. Returns a job_id (async, 202). enrich_fields required (at least one of contact.emails or contact.phones). Use company_list (slug) instead of domains to search a saved list.',
+        inputSchema: {
+          domains: z.array(z.string()).optional().describe('Company domains to search.'),
+          company_list: z.string().optional().describe('List slug instead of domains.'),
+          max_results_per_company: z.number().optional().describe('Max contacts per company.'),
+          job_titles: z.record(z.any()).optional().describe('include: { "1": ["CEO"], "2": ["VP"] }, exclude: [].'),
+          location: z.record(z.any()).optional().describe('include/exclude: [{ type, value }].'),
+          enrich_fields: z.array(z.string()).describe('At least one of contact.emails or contact.phones.'),
+          webhook: z.string().optional().describe('Webhook URL for completion.'),
+        },
+      },
+      async (args, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        const response = await client.contactSearch((args ?? {}) as import('./types.js').ContactSearchRequestV1);
+        if (!response.success || 'error' in response) {
+          return {
+            content: [{ type: 'text', text: `Contact search failed: ${(response as any).error}` }],
+            isError: true,
+          };
+        }
+        const r = response as { job_id: string; status: string };
+        return {
+          content: [{ type: 'text', text: `Started contact search.\n\nJob ID: ${r.job_id}\nStatus: ${r.status}` }],
+        };
+      },
+    );
+
+    this.server.registerTool(
+      'get_contact_search_status',
+      {
+        title: 'Get Contact Search Status',
+        description: 'GET /v1/contact/search/{job_id}/status. Poll until status is "completed" or "failed". Response includes record_ids.',
+        inputSchema: { job_id: z.string().describe('Contact search job ID.') },
+      },
+      async ({ job_id }, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        if (!job_id) throw new Error('job_id is required');
+        const response = await client.getContactSearchStatus(job_id);
+        if (!response.success || 'error' in response) {
+          return { content: [{ type: 'text', text: `Failed: ${(response as any).error}` }], isError: true };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(response, null, 2) }] };
+      },
+    );
+
+    // Contact enrich
+    this.server.registerTool(
+      'contact_enrich',
+      {
+        title: 'Contact Enrich',
+        description: 'POST /v1/contact/enrich. Enrich specific contacts by LinkedIn URL or name+domain. Returns a job_id (async, 202).',
+        inputSchema: {
+          contacts: z.array(z.record(z.any())).describe('{ linkedin_url } or { firstname, lastname, domain }.'),
+          enrich_fields: z.array(z.string()).describe('e.g. ["contact.emails","contact.phones"].'),
+        },
+      },
+      async (args, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        const response = await client.contactEnrich((args ?? {}) as import('./types.js').ContactEnrichRequestV1);
+        if (!response.success || 'error' in response) {
+          return {
+            content: [{ type: 'text', text: `Contact enrich failed: ${(response as any).error}` }],
+            isError: true,
+          };
+        }
+        const r = response as { job_id: string; status: string };
+        return {
+          content: [{ type: 'text', text: `Started contact enrichment.\n\nJob ID: ${r.job_id}\nStatus: ${r.status}` }],
+        };
+      },
+    );
+
+    this.server.registerTool(
+      'get_contact_enrich_status',
+      {
+        title: 'Get Contact Enrich Status',
+        description: 'GET /v1/contact/enrich/{job_id}/status. Poll until status is "completed" or "failed". Response includes record_ids.',
+        inputSchema: { job_id: z.string().describe('Contact enrich job ID.') },
+      },
+      async ({ job_id }, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        if (!job_id) throw new Error('job_id is required');
+        const response = await client.getContactEnrichStatus(job_id);
+        if (!response.success || 'error' in response) {
+          return { content: [{ type: 'text', text: `Failed: ${(response as any).error}` }], isError: true };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(response, null, 2) }] };
+      },
+    );
+
+    this.server.registerTool(
+      'get_contact',
+      {
+        title: 'Get Contact',
+        description: 'GET /v1/contact/get?record_id={uuid}. Retrieve a specific contact by record UUID. Never charges credits.',
+        inputSchema: { record_id: z.string().describe('Contact record UUID.') },
+      },
+      async ({ record_id }, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        if (!record_id) throw new Error('record_id is required');
+        const response = await client.getContact(record_id);
+        if (!response.success || 'error' in response) {
+          return {
+            content: [{ type: 'text', text: `Failed to get contact: ${(response as any).error}` }],
+            isError: true,
+          };
+        }
+        const rec = (response as any).record ?? (response as any).contact;
+        return { content: [{ type: 'text', text: JSON.stringify(rec ?? response, null, 2) }] };
+      },
+    );
+
+    // Lists
+    this.server.registerTool(
+      'list_lists',
+      {
+        title: 'List Lists',
+        description: 'GET /v1/lists. Optional: object_type=company or object_type=contact.',
+        inputSchema: {
+          object_type: z.enum(['company', 'contact']).optional().describe('Filter by type.'),
+        },
+      },
+      async (args, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        const objectType = args?.object_type as 'company' | 'contact' | undefined;
+        const result = await client.listLists(objectType);
+        if (!result.success) {
+          return {
+            content: [{ type: 'text', text: `Failed to list lists: ${result.error}` }],
+            isError: true,
+          };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(result.lists ?? [], null, 2) }] };
+      },
+    );
+
+    this.server.registerTool(
+      'create_list',
+      {
+        title: 'Create List',
+        description: 'POST /v1/lists. Body: name, object_type (company or contact).',
+        inputSchema: {
+          name: z.string().describe('List name.'),
+          object_type: z.enum(['company', 'contact']).describe('Type of list.'),
+        },
+      },
+      async (args, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        const response = await client.createList(args ?? {});
+        if (!response.success) {
+          return {
+            content: [{ type: 'text', text: `Failed to create list: ${response.error}` }],
+            isError: true,
+          };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(response.list ?? response, null, 2) }] };
+      },
+    );
+
+    this.server.registerTool(
+      'get_list_items',
+      {
+        title: 'Get List Items',
+        description: 'GET /v1/lists/{object_type}/{list_slug}. object_type: company or contact. list_slug: e.g. target-accounts. Parameters: page, page_size (max 100), sort_by, sort_order (asc/desc).',
+        inputSchema: {
+          object_type: z.enum(['company', 'contact']).describe('Type of list.'),
+          list_slug: z.string().describe('List slug (e.g. target-accounts).'),
+          page: z.number().optional(),
+          page_size: z.number().optional().describe('Max 100.'),
+          sort_by: z.string().optional(),
+          sort_order: z.enum(['asc', 'desc']).optional(),
+        },
+      },
+      async (args, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        const objectType = args?.object_type as 'company' | 'contact';
+        const listSlug = args?.list_slug as string;
+        if (!objectType || !listSlug) throw new Error('object_type and list_slug are required');
+        let params: import('./types.js').ListItemsParamsV1 | undefined;
+        if (
+          args?.page != null ||
+          args?.page_size != null ||
+          args?.sort_by != null ||
+          args?.sort_order != null
+        ) {
+          params = {};
+          if (args?.page != null) params.page = args.page;
+          if (args?.page_size != null) params.page_size = args.page_size;
+          if (args?.sort_by != null) params.sort_by = args.sort_by;
+          if (args?.sort_order != null) params.sort_order = args.sort_order;
+        }
+        const result = await client.getListItems(objectType, listSlug, params);
+        if (!result.success) {
+          return {
+            content: [{ type: 'text', text: `Failed to get list items: ${result.error}` }],
+            isError: true,
+          };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(result.items ?? [], null, 2) }] };
+      },
+    );
+
+    this.server.registerTool(
+      'remove_list_item',
+      {
+        title: 'Remove List Item',
+        description: 'DELETE /v1/lists/{object_type}/{list_slug}/{item_id}.',
+        inputSchema: {
+          object_type: z.enum(['company', 'contact']),
+          list_slug: z.string(),
+          item_id: z.string(),
+        },
+      },
+      async (args, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        const objectType = args?.object_type as 'company' | 'contact';
+        const listSlug = args?.list_slug as string;
+        const itemId = args?.item_id as string;
+        if (!objectType || !listSlug || !itemId) throw new Error('object_type, list_slug, and item_id are required');
+        const result = await client.removeListItem(objectType, listSlug, itemId);
+        if (!result.success) {
+          return {
+            content: [{ type: 'text', text: `Failed to remove item: ${result.error}` }],
+            isError: true,
+          };
+        }
+        return { content: [{ type: 'text', text: 'Item removed from list.' }] };
+      },
+    );
+
+    this.server.registerTool(
+      'delete_list',
+      {
+        title: 'Delete List',
+        description: 'DELETE /v1/lists/{object_type}/{list_slug}. System lists cannot be deleted.',
+        inputSchema: {
+          object_type: z.enum(['company', 'contact']),
+          list_slug: z.string(),
+        },
+      },
+      async (args, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        const objectType = args?.object_type as 'company' | 'contact';
+        const listSlug = args?.list_slug as string;
+        if (!objectType || !listSlug) throw new Error('object_type and list_slug are required');
+        try {
+          await client.deleteList(objectType, listSlug);
+          return { content: [{ type: 'text', text: 'List deleted.' }] };
+        } catch (err: any) {
+          return {
+            content: [{ type: 'text', text: `Failed to delete list: ${err?.message ?? String(err)}` }],
+            isError: true,
+          };
+        }
+      },
+    );
+
+    this.server.registerTool(
+      'get_credits_balance',
+      {
+        title: 'Get Credits Balance',
+        description: 'GET /v1/credits/balance. Returns credits_balance and balances (one_off, recurring, rollover, total).',
+        inputSchema: {},
+      },
+      async (_, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        const response = await client.getCreditsBalance();
+        if (!response.success || 'error' in response) {
+          return {
+            content: [{ type: 'text', text: `Failed to get credits: ${(response as any).error}` }],
+            isError: true,
+          };
+        }
+        const r = response as { credits_balance: number; balances?: unknown };
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Credits balance: ${r.credits_balance}${r.balances ? `\n${JSON.stringify(r.balances, null, 2)}` : ''}`,
+            },
+          ],
+        };
+      },
+    );
+
     // Health check tool
     this.server.registerTool(
       'health_check',
       {
       title: 'Health Check',
-        description: 'Check if the DataMerge API client is healthy',
+        description: 'Check if the DataMerge API client is configured and can connect. Uses /auth/info.',
       inputSchema: {},
       },
       async (_, extra) => {
