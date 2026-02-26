@@ -817,14 +817,23 @@ export class DataMergeMCPServer {
       };
     }
 
-    const { company, parents = [], children = [] } = response;
-    
-    // Return full hierarchy data as JSON
+    const { company, parents = [], children = [], results, total_count, results_count } = response as {
+      company: unknown;
+      parents?: unknown[];
+      children?: unknown[];
+      results?: unknown[];
+      total_count?: number;
+      results_count?: number;
+    };
+    const payload = { company, parents, children };
+    if (Array.isArray(results)) (payload as any).results = results;
+    if (total_count != null) (payload as any).total_count = total_count;
+    if (results_count != null) (payload as any).results_count = results_count;
     return {
       content: [
         {
           type: 'text',
-          text: JSON.stringify({ company, parents, children }, null, 2),
+          text: JSON.stringify(payload, null, 2),
         },
       ],
     };

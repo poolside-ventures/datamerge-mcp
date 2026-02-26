@@ -319,20 +319,27 @@ export class DataMergeClient {
     if (data && typeof data === 'object' && 'error' in data) {
       return { success: false, error: String(data.error) } as ApiResponse<CompanyHierarchyResponseV1>;
     }
-    // API may return { company, parents, children } or { entities } or similar; normalize to our shape with success: true
-    const company = data?.company ?? data?.record ?? (Array.isArray(data?.entities) ? data.entities[0] : null);
-    const parents = data?.parents ?? data?.parent_companies ?? [];
-    const children = data?.children ?? data?.subsidiaries ?? [];
-    const entities = Array.isArray(data?.entities) ? data.entities : [];
+    // API returns { total_count, results_count, results: [ { id, parent_id, hierarchy_level, ... } ] } (flat array)
+    const resultsArray =
+      Array.isArray(data?.results) ? data.results
+      : Array.isArray(data?.entities) ? data.entities
+      : Array.isArray(data?.children) ? data.children
+      : [];
     const mapOne = (r: any) => this.mapCompanyRecord(r);
-    const mappedParents = Array.isArray(parents) ? parents.map(mapOne) : [];
-    const mappedChildren = Array.isArray(children) ? children.map(mapOne) : [];
-    const mappedCompany = company ? mapOne(company) : (entities.length > 0 ? mapOne(entities[0]) : null);
+    const mappedResults = resultsArray.map(mapOne);
+    const requestedId = validated.datamerge_id;
+    const primary =
+      mappedResults.find((r: any) => r.id === requestedId || (r as any).datamerge_id === requestedId) ??
+      mappedResults[0];
+    const others = primary ? mappedResults.filter((r: any) => r !== primary) : mappedResults;
     return {
       success: true,
-      company: mappedCompany ?? ({} as CompanyRecordV1),
-      parents: mappedParents,
-      children: mappedChildren.length > 0 ? mappedChildren : (entities.length > 1 ? entities.slice(1).map(mapOne) : []),
+      company: primary ?? ({} as CompanyRecordV1),
+      parents: [],
+      children: others,
+      results: mappedResults,
+      total_count: data?.total_count,
+      results_count: data?.results_count ?? mappedResults.length,
     };
   }
 
