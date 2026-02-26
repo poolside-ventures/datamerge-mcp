@@ -77,10 +77,13 @@ export class DataMergeClient {
   /**
    * Normalize a raw company record from the DataMerge API into the
    * library's CompanyRecordV1 shape while preserving all original fields.
+   * Derives status: when record has substantial data (legal_name, display_name, etc.) but API sent status "not_found", set status to "success" so agents don't treat it as a failed lookup.
    */
   private mapCompanyRecord(raw: any): CompanyRecordV1 {
     const id =
-      (raw && (raw.record_id || raw.id)) != null ? String(raw.record_id ?? raw.id) : '';
+      (raw && (raw.record_id || raw.id || raw.datamerge_id)) != null
+        ? String(raw.record_id ?? raw.id ?? raw.datamerge_id)
+        : '';
     const name =
       (raw &&
         (raw.display_name || raw.legal_name || raw.name || raw.domain || 'Unknown')) ??
@@ -97,9 +100,18 @@ export class DataMergeClient {
       ultimate_parent_id: raw?.global_ultimate_id ?? raw?.ultimate_parent_id ?? null,
     };
 
+    const spread = { ...(raw ?? {}) };
+    const hasSubstantialData =
+      !!(raw?.legal_name || raw?.display_name || raw?.domain || raw?.address1 || raw?.national_id);
+    if (
+      hasSubstantialData &&
+      (spread.status === 'not_found' || spread.status === 'no_query_match')
+    ) {
+      spread.status = 'success';
+    }
     return {
       ...base,
-      ...(raw ?? {}),
+      ...spread,
     };
   }
 
@@ -301,11 +313,27 @@ export class DataMergeClient {
     params: CompanyHierarchyParamsV1,
   ): Promise<ApiResponse<CompanyHierarchyResponseV1>> {
     const validated = CompanyHierarchyParamsV1Schema.parse(params) as CompanyHierarchyParamsV1;
-    const response = await this.client.get<ApiResponse<CompanyHierarchyResponseV1>>(
-      '/v1/company/hierarchy',
-      { params: validated },
-    );
-    return response.data;
+    const response = await this.client.get('/v1/company/hierarchy', { params: validated });
+    const raw = response.data as any;
+    const data = raw && typeof raw === 'object' && (raw.result ?? raw.data) ? (raw.result ?? raw.data) : raw;
+    if (data && typeof data === 'object' && 'error' in data) {
+      return { success: false, error: String(data.error) } as ApiResponse<CompanyHierarchyResponseV1>;
+    }
+    // API may return { company, parents, children } or { entities } or similar; normalize to our shape with success: true
+    const company = data?.company ?? data?.record ?? (Array.isArray(data?.entities) ? data.entities[0] : null);
+    const parents = data?.parents ?? data?.parent_companies ?? [];
+    const children = data?.children ?? data?.subsidiaries ?? [];
+    const entities = Array.isArray(data?.entities) ? data.entities : [];
+    const mapOne = (r: any) => this.mapCompanyRecord(r);
+    const mappedParents = Array.isArray(parents) ? parents.map(mapOne) : [];
+    const mappedChildren = Array.isArray(children) ? children.map(mapOne) : [];
+    const mappedCompany = company ? mapOne(company) : (entities.length > 0 ? mapOne(entities[0]) : null);
+    return {
+      success: true,
+      company: mappedCompany ?? ({} as CompanyRecordV1),
+      parents: mappedParents,
+      children: mappedChildren.length > 0 ? mappedChildren : (entities.length > 1 ? entities.slice(1).map(mapOne) : []),
+    };
   }
 
   // -------------------------------------------------------------------------

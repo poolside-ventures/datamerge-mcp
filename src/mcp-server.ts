@@ -672,12 +672,31 @@ export class DataMergeMCPServer {
         status === 'cancelled';
 
       if (isCompleted) {
-        // Return full job data as JSON including all results
+        // Return company data inline: use job.results if populated, else fetch by record_id so agent gets data without calling get_company
+        const companies: unknown[] = [];
+        if (job.results?.length) {
+          companies.push(...job.results);
+        }
+        const recordIds = (job as any).record_ids as string[] | undefined;
+        if (recordIds?.length && companies.length === 0) {
+          for (const recordId of recordIds) {
+            const getRes = await client.getCompany({ record_id: recordId });
+            if (getRes.success && 'company' in getRes && getRes.company) {
+              companies.push(getRes.company);
+            }
+          }
+        }
+        const payload = {
+          status: job.status,
+          job_id: job.id,
+          record_ids: recordIds ?? (job as any).record_ids,
+          companies: companies.length ? companies : (job.results ?? []),
+        };
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(job, null, 2),
+              text: JSON.stringify(payload, null, 2),
             },
           ],
         };
