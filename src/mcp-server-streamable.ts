@@ -1062,6 +1062,8 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
           websiteUrl: 'https://www.datamerge.ai',
           icons: [{ src: 'https://www.datamerge.ai/favicon.ico', sizes: ['any'] }],
         },
+        homepage: 'https://www.datamerge.ai',
+        iconUrl: 'https://www.datamerge.ai/favicon.ico',
         authentication: { required: false },
       });
     });
