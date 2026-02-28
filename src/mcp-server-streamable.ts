@@ -20,7 +20,12 @@ export class DataMergeMCPStreamable {
     this.server = new McpServer({
       name: 'datamerge-mcp',
       version: '1.0.0',
+      title: 'DataMerge MCP',
       description: 'DataMerge MCP Server for company enrichment and hierarchy',
+      websiteUrl: 'https://www.datamerge.ai',
+      icons: [
+        { src: 'https://www.datamerge.ai/favicon.ico', sizes: ['any'] },
+      ],
     });
 
     this.setupToolHandlers();
@@ -882,7 +887,9 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
       {
         title: 'Get Credits Balance',
         description: 'GET /v1/credits/balance. Returns credits_balance and balances (one_off, recurring, rollover, total).',
-        inputSchema: {},
+        inputSchema: {
+          _: z.string().optional().describe('This tool takes no required parameters. Call with no arguments.'),
+        },
         annotations: { readOnlyHint: true },
       },
       async (_, extra) => {
@@ -912,7 +919,9 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
       {
         title: 'Health Check',
         description: 'Check if the DataMerge API client is configured and can connect. Uses /auth/info.',
-        inputSchema: {},
+        inputSchema: {
+          _: z.string().optional().describe('This tool takes no required parameters. Call with no arguments.'),
+        },
         annotations: { readOnlyHint: true },
       },
       async (_, extra) => {
@@ -1040,6 +1049,21 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
         return;
       }
       next();
+    });
+
+    // Static server card for discovery / Smithery quality scan (homepage, icon, etc.)
+    app.get('/.well-known/mcp/server-card.json', (_req: Request, res: Response) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.json({
+        serverInfo: {
+          name: 'datamerge-mcp',
+          version: '1.0.0',
+          title: 'DataMerge MCP',
+          websiteUrl: 'https://www.datamerge.ai',
+          icons: [{ src: 'https://www.datamerge.ai/favicon.ico', sizes: ['any'] }],
+        },
+        authentication: { required: false },
+      });
     });
 
     // MCP POST endpoint (naked path for dedicated MCP subdomain)

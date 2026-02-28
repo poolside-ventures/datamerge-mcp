@@ -26,7 +26,7 @@
       ],
       "variables": {
         "apiKey": {
-          "description": "DataMerge API key (optional here; you can also use configure_datamerge after connecting).",
+          "description": "DataMerge API key (optional; you can also use configure_datamerge after connecting).",
           "isRequired": false,
           "isSecret": true
         }
