@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "ai.datamerge/mcp",
+  "title": "DataMerge MCP",
+  "description": "B2B data enrichment for 375M+ companies: legal entities, corporate hierarchies, and contacts.",
+  "version": "1.0.0",
+  "websiteUrl": "https://www.datamerge.ai",
+  "icons": [
+    {
+      "src": "https://www.datamerge.ai/favicon.ico",
+      "sizes": ["any"]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.datamerge.ai",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Your DataMerge API key — get one free at https://app.datamerge.ai (20 credits on signup, no credit card required). Format: Bearer YOUR_API_KEY or Token YOUR_API_KEY.",
+          "isRequired": false,
+          "isSecret": true,
+          "placeholder": "Bearer your_api_key_here"
+        }
+      ],
+      "variables": {
+        "apiKey": {
+          "description": "DataMerge API key (optional here; you can also use configure_datamerge after connecting).",
+          "isRequired": false,
+          "isSecret": true
+        }
+      }
+    }
+  ]
+}

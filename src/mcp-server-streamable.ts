@@ -24,6 +24,63 @@ export class DataMergeMCPStreamable {
     });
 
     this.setupToolHandlers();
+    this.setupPromptHandlers();
+  }
+
+  private setupPromptHandlers(): void {
+    this.server.registerPrompt(
+      'enrich_company_workflow',
+      {
+        title: 'Enrich Company Workflow',
+        description: 'Step-by-step prompt for enriching companies by domain using DataMerge.',
+        argsSchema: {
+          domain: z.string().optional().describe('Company domain to enrich (e.g. example.com).'),
+        },
+      },
+      async (args) => ({
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `To enrich a company with DataMerge:
+1. Call configure_datamerge with your API key if not already set.
+2. For a single domain: use start_company_enrichment_and_wait with domain: "${args?.domain ?? 'example.com'}" to start and wait for the result.
+3. Or use start_company_enrichment to get a job_id, then poll get_company_enrichment_result until status is "completed".
+4. Use get_company with the returned record_id to fetch the full company record (free).
+
+Credits: 1 credit per company. Get 20 free at https://app.datamerge.ai`,
+            },
+          },
+        ],
+      }),
+    );
+    this.server.registerPrompt(
+      'datamerge_quickstart',
+      {
+        title: 'DataMerge Quick Start',
+        description: 'Quick reference for connecting and using the DataMerge MCP server.',
+        argsSchema: {},
+      },
+      async () => ({
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `DataMerge MCP Quick Start:
+• Auth: Use configure_datamerge with your API key, or set Authorization: Bearer YOUR_KEY when connecting.
+• Enrich company: start_company_enrichment_and_wait({ domain: "example.com" })
+• Get company: get_company({ record_id: "uuid-from-enrichment" }) — free, no credit
+• Hierarchy: get_company_hierarchy({ datamerge_id: "DM001..." })
+• Contacts: contact_search({ domains: ["example.com"], enrich_fields: ["contact.emails"] })
+• Credits: get_credits_balance()
+Docs: https://www.datamerge.ai/docs/llms.txt`,
+            },
+          },
+        ],
+      }),
+    );
   }
 
   private setupToolHandlers(): void {
@@ -35,9 +92,10 @@ export class DataMergeMCPStreamable {
         description:
           'Configure DataMerge API authentication (required before using other tools if DATAMERGE_API_KEY is not set).',
         inputSchema: {
-          apiKey: z.string().optional().describe('DataMerge API key'),
-          baseUrl: z.string().optional().describe('Optional custom base URL'),
+          apiKey: z.string().optional().describe('DataMerge API key. Get one at https://app.datamerge.ai (20 free credits).'),
+          baseUrl: z.string().optional().describe('Optional custom API base URL (default: https://api.datamerge.ai).'),
         },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
       },
       async ({ apiKey, baseUrl }, extra) => {
         console.log(`🔧 configure_datamerge called: sessionId=${extra.sessionId}, hasApiKey=${!!apiKey}, hasBaseUrl=${!!baseUrl}`);
@@ -104,8 +162,9 @@ export class DataMergeMCPStreamable {
             .describe('Optional webhook URL to receive job completion notifications.'),
           domains: z.array(z.string()).optional().describe('Batch: multiple domains to enrich.'),
           list: z.string().optional().describe('List slug to add enriched companies to.'),
-          skip_if_exists: z.boolean().optional().describe('Skip domains already in list.'),
+          skip_if_exists: z.boolean().optional().describe('When true, skip domains that are already in the list.'),
         },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       },
       async (args, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -147,8 +206,9 @@ export class DataMergeMCPStreamable {
         description:
           'GET /v1/company/enrich/{job_id}/status. Poll until status is "completed" or "failed". Response includes record_ids. Status values: queued · processing · completed · failed.',
         inputSchema: {
-          job_id: z.string().describe('The enrichment job ID returned by start_company_enrichment.'),
+          job_id: z.string().describe('The enrichment job ID returned by start_company_enrichment. Poll until status is "completed" or "failed".'),
         },
+        annotations: { readOnlyHint: true },
       },
       async ({ job_id }, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -225,10 +285,11 @@ export class DataMergeMCPStreamable {
             .number()
             .optional()
             .describe('Maximum time to wait for completion (in seconds). Defaults to 60 seconds.'),
-          domains: z.array(z.string()).optional().describe('Batch: multiple domains to enrich.'),
+          domains: z.array(z.string()).optional().describe('Batch: multiple domains to enrich in one job.'),
           list: z.string().optional().describe('List slug to add enriched companies to.'),
-          skip_if_exists: z.boolean().optional().describe('Skip domains already in list.'),
+          skip_if_exists: z.boolean().optional().describe('When true, skip domains already in the list.'),
         },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       },
       async (args, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -374,9 +435,10 @@ export class DataMergeMCPStreamable {
           'Get a single company record. GET /v1/company/get?datamerge_id={id} or ?record_id={uuid}. Provide either datamerge_id (charges 1 credit) or record_id (free). Not both. Optional: add_to_list — list slug to add the company to (only with datamerge_id).',
       inputSchema: {
           datamerge_id: z.string().optional().describe('DataMerge company ID. Charges 1 credit.'),
-          record_id: z.string().optional().describe('Your record UUID from previous enrichment. Free.'),
-          add_to_list: z.string().optional().describe('List slug to add the company to. Only valid with datamerge_id.'),
+          record_id: z.string().optional().describe('Your record UUID from a previous enrichment. Does not consume credits.'),
+          add_to_list: z.string().optional().describe('List slug to add the company to. Only valid when using datamerge_id.'),
         },
+        annotations: { readOnlyHint: true },
       },
       async (args, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -423,9 +485,10 @@ export class DataMergeMCPStreamable {
           include_branches: z.boolean().optional().describe('Include branch entities.'),
           only_subsidiaries: z.boolean().optional().describe('Return only subsidiaries.'),
           max_level: z.number().int().optional().describe('Maximum hierarchy depth.'),
-          country_code: z.array(z.string()).optional().describe('Filter by country code(s).'),
-          page: z.number().int().optional().describe('Page number for pagination.'),
+          country_code: z.array(z.string()).optional().describe('Filter entities by ISO 2-letter country code(s).'),
+          page: z.number().int().optional().describe('Page number for paginated results (1-based).'),
         },
+        annotations: { readOnlyHint: true },
       },
       async (args, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -495,11 +558,12 @@ export class DataMergeMCPStreamable {
         title: 'Start Lookalike',
         description: 'POST /v1/company/lookalike. Find similar companies using seed domains. Returns a job_id (async, 202). Poll GET /v1/company/lookalike/{job_id}/status until completed or failed.',
         inputSchema: {
-          companiesFilters: z.record(z.any()).describe('Filters: lookalikeDomains, primaryLocations, companySizes, revenues, yearFounded.'),
-          size: z.number().optional().describe('Max number of lookalikes (e.g. 50).'),
+          companiesFilters: z.record(z.any()).describe('Filters object: lookalikeDomains (seed domains), primaryLocations, companySizes, revenues, yearFounded.'),
+          size: z.number().optional().describe('Maximum number of lookalike companies to return (e.g. 50).'),
           list: z.string().optional().describe('List slug to add results to.'),
-          exclude_all: z.boolean().optional().describe('Exclude companies already in list.'),
+          exclude_all: z.boolean().optional().describe('When true, exclude companies already in the list.'),
         },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       },
       async (args, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -524,7 +588,8 @@ export class DataMergeMCPStreamable {
       {
         title: 'Get Lookalike Status',
         description: 'GET /v1/company/lookalike/{job_id}/status. Poll until status is "completed" or "failed". Response includes record_ids.',
-        inputSchema: { job_id: z.string().describe('Lookalike job ID.') },
+        inputSchema: { job_id: z.string().describe('The lookalike job ID returned by start_lookalike. Poll until status is "completed" or "failed".') },
+        annotations: { readOnlyHint: true },
       },
       async ({ job_id }, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -550,11 +615,12 @@ export class DataMergeMCPStreamable {
           domains: z.array(z.string()).optional().describe('Company domains to search.'),
           company_list: z.string().optional().describe('List slug instead of domains.'),
           max_results_per_company: z.number().optional().describe('Max contacts per company.'),
-          job_titles: z.record(z.any()).optional().describe('include: { "1": ["CEO"], "2": ["VP"] }, exclude: [].'),
-          location: z.record(z.any()).optional().describe('include/exclude: [{ type, value }].'),
-          enrich_fields: z.array(z.string()).describe('At least one of contact.emails or contact.phones.'),
-          webhook: z.string().optional().describe('Webhook URL for completion.'),
+          job_titles: z.record(z.any()).optional().describe('Priority tiers: include: { "1": ["CEO"], "2": ["VP Sales"] }, exclude: ["Intern"].'),
+          location: z.record(z.any()).optional().describe('Location filters: include/exclude with type and value (country, region, city).'),
+          enrich_fields: z.array(z.string()).describe('At least one of "contact.emails" or "contact.phones". Each email costs 1 credit; phone 4 credits.'),
+          webhook: z.string().optional().describe('Optional webhook URL to notify when the job completes.'),
         },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       },
       async (args, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -577,7 +643,8 @@ export class DataMergeMCPStreamable {
       {
         title: 'Get Contact Search Status',
         description: 'GET /v1/contact/search/{job_id}/status. Poll until status is "completed" or "failed". Response includes record_ids.',
-        inputSchema: { job_id: z.string().describe('Contact search job ID.') },
+        inputSchema: { job_id: z.string().describe('The contact search job ID returned by contact_search. Poll until status is "completed" or "failed".') },
+        annotations: { readOnlyHint: true },
       },
       async ({ job_id }, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -597,9 +664,10 @@ export class DataMergeMCPStreamable {
         title: 'Contact Enrich',
         description: 'POST /v1/contact/enrich. Enrich specific contacts by LinkedIn URL or name+domain. Returns a job_id (async, 202).',
         inputSchema: {
-          contacts: z.array(z.record(z.any())).describe('{ linkedin_url } or { firstname, lastname, domain }.'),
-          enrich_fields: z.array(z.string()).describe('e.g. ["contact.emails","contact.phones"].'),
+          contacts: z.array(z.record(z.any())).describe('Array of contacts: either { linkedin_url } or { firstname, lastname, domain }.'),
+          enrich_fields: z.array(z.string()).describe('Fields to enrich, e.g. ["contact.emails", "contact.phones"].'),
         },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       },
       async (args, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -622,7 +690,8 @@ export class DataMergeMCPStreamable {
       {
         title: 'Get Contact Enrich Status',
         description: 'GET /v1/contact/enrich/{job_id}/status. Poll until status is "completed" or "failed". Response includes record_ids.',
-        inputSchema: { job_id: z.string().describe('Contact enrich job ID.') },
+        inputSchema: { job_id: z.string().describe('The contact enrich job ID returned by contact_enrich. Poll until status is "completed" or "failed".') },
+        annotations: { readOnlyHint: true },
       },
       async ({ job_id }, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -640,7 +709,8 @@ export class DataMergeMCPStreamable {
       {
         title: 'Get Contact',
         description: 'GET /v1/contact/get?record_id={uuid}. Retrieve a specific contact by record UUID. Never charges credits.',
-        inputSchema: { record_id: z.string().describe('Contact record UUID.') },
+        inputSchema: { record_id: z.string().describe('Contact record UUID from a previous contact_search or contact_enrich job. Does not consume credits.') },
+        annotations: { readOnlyHint: true },
       },
       async ({ record_id }, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -664,8 +734,9 @@ export class DataMergeMCPStreamable {
         title: 'List Lists',
         description: 'GET /v1/lists. Optional: object_type=company or object_type=contact.',
         inputSchema: {
-          object_type: z.enum(['company', 'contact']).optional().describe('Filter by type.'),
+          object_type: z.enum(['company', 'contact']).optional().describe('Filter lists by object type: company or contact.'),
         },
+        annotations: { readOnlyHint: true },
       },
       async (args, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -687,9 +758,10 @@ export class DataMergeMCPStreamable {
         title: 'Create List',
         description: 'POST /v1/lists. Body: name, object_type (company or contact).',
         inputSchema: {
-          name: z.string().describe('List name.'),
-          object_type: z.enum(['company', 'contact']).describe('Type of list.'),
+          name: z.string().describe('Display name for the new list.'),
+          object_type: z.enum(['company', 'contact']).describe('Whether the list holds company or contact records.'),
         },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       },
       async (args, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -710,13 +782,14 @@ export class DataMergeMCPStreamable {
         title: 'Get List Items',
         description: 'GET /v1/lists/{object_type}/{list_slug}. object_type: company or contact. list_slug: e.g. target-accounts. Parameters: page, page_size (max 100), sort_by, sort_order (asc/desc).',
         inputSchema: {
-          object_type: z.enum(['company', 'contact']).describe('Type of list.'),
-          list_slug: z.string().describe('List slug (e.g. target-accounts).'),
-          page: z.number().optional(),
-          page_size: z.number().optional().describe('Max 100.'),
-          sort_by: z.string().optional(),
-          sort_order: z.enum(['asc', 'desc']).optional(),
+          object_type: z.enum(['company', 'contact']).describe('Type of list: company or contact.'),
+          list_slug: z.string().describe('URL-safe list identifier (e.g. target-accounts).'),
+          page: z.number().optional().describe('Page number for pagination (1-based).'),
+          page_size: z.number().optional().describe('Items per page (max 100).'),
+          sort_by: z.string().optional().describe('Field name to sort by.'),
+          sort_order: z.enum(['asc', 'desc']).optional().describe('Sort direction: asc or desc.'),
         },
+        annotations: { readOnlyHint: true },
       },
       async (args, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -753,10 +826,11 @@ export class DataMergeMCPStreamable {
         title: 'Remove List Item',
         description: 'DELETE /v1/lists/{object_type}/{list_slug}/{item_id}.',
         inputSchema: {
-          object_type: z.enum(['company', 'contact']),
-          list_slug: z.string(),
-          item_id: z.string(),
+          object_type: z.enum(['company', 'contact']).describe('Type of list: company or contact.'),
+          list_slug: z.string().describe('List slug containing the item.'),
+          item_id: z.string().describe('Record UUID of the company or contact to remove from the list.'),
         },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
       },
       async (args, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -781,9 +855,10 @@ export class DataMergeMCPStreamable {
         title: 'Delete List',
         description: 'DELETE /v1/lists/{object_type}/{list_slug}. System lists cannot be deleted.',
         inputSchema: {
-          object_type: z.enum(['company', 'contact']),
-          list_slug: z.string(),
+          object_type: z.enum(['company', 'contact']).describe('Type of list: company or contact.'),
+          list_slug: z.string().describe('List slug of the list to delete. System lists cannot be deleted.'),
         },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
       },
       async (args, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -808,6 +883,7 @@ export class DataMergeMCPStreamable {
         title: 'Get Credits Balance',
         description: 'GET /v1/credits/balance. Returns credits_balance and balances (one_off, recurring, rollover, total).',
         inputSchema: {},
+        annotations: { readOnlyHint: true },
       },
       async (_, extra) => {
         const client = this.getClientForSession(extra.sessionId);
@@ -834,9 +910,10 @@ export class DataMergeMCPStreamable {
     this.server.registerTool(
       'health_check',
       {
-      title: 'Health Check',
+        title: 'Health Check',
         description: 'Check if the DataMerge API client is configured and can connect. Uses /auth/info.',
-      inputSchema: {},
+        inputSchema: {},
+        annotations: { readOnlyHint: true },
       },
       async (_, extra) => {
         const client = this.getClientForSession(extra.sessionId);
