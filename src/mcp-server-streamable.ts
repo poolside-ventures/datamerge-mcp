@@ -21,6 +21,9 @@ export class DataMergeMCPStreamable {
   private transports: Map<string, StreamableHTTPServerTransport> = new Map();
   private clients: Map<string, DataMergeClient> = new Map();
   private apiKeys: Map<string, string> = new Map(); // Store API keys per session
+  // Beta feature flags granted to each session, fetched lazily from
+  // /v1/account/features the first time a gated tool is invoked.
+  private sessionFeatures: Map<string, Set<string>> = new Map();
 
   constructor() {
     this.server = new McpServer({
@@ -1065,6 +1068,127 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
       };
       },
     );
+
+    // ----- Gated (beta) tools -----
+    // The streamable server registers tools globally, so these are advertised
+    // to all sessions. The handler enforces the flag against the caller's API
+    // key by reading /v1/account/features; sessions without the flag receive
+    // an "access denied" error. The underlying API endpoints also 404
+    // unflagged calls, so the gating is defense-in-depth.
+    this.server.registerTool(
+      'company_lookalike_fast',
+      {
+        title: 'Company Lookalike (Fast, Beta)',
+        description:
+          'POST /v1/company/lookalike/fast. Synchronous lookalike returning raw Ocean candidates without per-candidate enrichment. Lower-latency, lower-cost variant for agent use cases. BETA: requires the `lookalike_fast` flag on the account.',
+        inputSchema: {
+          domain: z.string().describe('Source company domain.'),
+          size: z.number().int().min(1).max(50).optional().describe('Number of candidates (1-50, default 5).'),
+          companiesFilters: z
+            .record(z.any())
+            .optional()
+            .describe('Optional Ocean v3 companiesFilters passthrough (e.g. minRelevance, headcountFrom, countries).'),
+        },
+        annotations: { readOnlyHint: true, idempotentHint: true },
+      },
+      async (args, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        const features = await this.getFeaturesForSession(extra.sessionId!, client);
+        if (!features.has('lookalike_fast')) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'company_lookalike_fast is a beta tool not enabled for this account. Contact DataMerge to request access.',
+              },
+            ],
+            isError: true,
+          };
+        }
+        const payload: {
+          domain: string;
+          size?: number;
+          companiesFilters?: Record<string, unknown>;
+        } = { domain: String(args?.domain ?? '') };
+        if (typeof args?.size === 'number') payload.size = args.size;
+        if (args?.companiesFilters && typeof args.companiesFilters === 'object') {
+          payload.companiesFilters = args.companiesFilters as Record<string, unknown>;
+        }
+        const response = await client.companyLookalikeFast(payload);
+        if ('error' in response) {
+          return {
+            content: [{ type: 'text', text: `Fast lookalike failed: ${(response as any).error}` }],
+            isError: true,
+          };
+        }
+        const r = response as { source_domain: string; total: number; candidates: any[] };
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Found ${r.candidates.length} candidate(s) for ${r.source_domain} (total: ${r.total}).\n\n${JSON.stringify(r.candidates, null, 2)}`,
+            },
+          ],
+        };
+      },
+    );
+
+    this.server.registerTool(
+      'contact_search_unenriched',
+      {
+        title: 'Contact Search (Unenriched, Beta)',
+        description:
+          'POST /v1/contact/search/unenriched. Find contacts without running email/phone enrichment. Returns a job_id; contacts are created in `unconfirmed` status with stable ids. BETA: requires the `contact_search_unenriched` flag on the account.',
+        inputSchema: {
+          domains: z.array(z.string()).optional().describe('Company domains to search.'),
+          company_list: z.string().optional().describe('Alternative to domains: list slug to search across.'),
+          max_results_per_company: z.number().int().optional(),
+          job_titles: z.record(z.any()).optional(),
+          location: z.record(z.any()).optional(),
+          webhook: z.string().optional(),
+        },
+        annotations: { readOnlyHint: false, idempotentHint: false },
+      },
+      async (args, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        const features = await this.getFeaturesForSession(extra.sessionId!, client);
+        if (!features.has('contact_search_unenriched')) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'contact_search_unenriched is a beta tool not enabled for this account. Contact DataMerge to request access.',
+              },
+            ],
+            isError: true,
+          };
+        }
+        const response = await client.contactSearchUnenriched((args ?? {}) as Record<string, unknown>);
+        if ('error' in response) {
+          return {
+            content: [{ type: 'text', text: `Unenriched contact search failed: ${(response as any).error}` }],
+            isError: true,
+          };
+        }
+        const r = response as { job_id: string; status: string };
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Started unenriched contact search.\n\nJob ID: ${r.job_id}\nStatus: ${r.status}\n\nPoll /v1/contact/search/{job_id}/status; contacts arrive in unconfirmed state.`,
+            },
+          ],
+        };
+      },
+    );
+  }
+
+  private async getFeaturesForSession(sessionId: string, client: DataMergeClient): Promise<Set<string>> {
+    const cached = this.sessionFeatures.get(sessionId);
+    if (cached) return cached;
+    const features = new Set(await client.getAccountFeatures());
+    this.sessionFeatures.set(sessionId, features);
+    return features;
   }
 
   /**
@@ -1239,6 +1363,7 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
               this.transports.delete(sid);
               this.clients.delete(sid);
               this.apiKeys.delete(sid); // Clean up stored API key
+              this.sessionFeatures.delete(sid);
             }
           };
 
