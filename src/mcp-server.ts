@@ -2,6 +2,12 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { DataMergeClient } from './datamerge-client.js';
+import {
+  decodeContinuationToken,
+  runJobIteration,
+  RUN_JOB_DEFAULT_MAX_WAIT_SECONDS,
+  RUN_JOB_SUGGESTED_MAX_ATTEMPTS,
+} from './run-job.js';
 
 /**
  * MCP Server for the DataMerge Company API
@@ -153,6 +159,71 @@ export class DataMergeMCPServer {
                 skip_if_exists: {
                   type: 'boolean',
                   description: 'When true, skip domains that already exist in the list.',
+                },
+              },
+              required: [],
+            },
+          },
+          {
+            name: 'run_company_enrichment',
+            description:
+              `Agent-friendly company enrichment. On the first call provide enrichment params (domain, domains, company_name, country_code, etc.); the server starts the job and polls internally for up to ~${RUN_JOB_DEFAULT_MAX_WAIT_SECONDS}s. If the job is still running when that window expires, the response will be {status:"pending", continuation_token, attempt, elapsed_seconds}. When you see status "pending" you MUST immediately call run_company_enrichment again with only continuation_token set — do not ask the user, do not call any other tool first. Typical jobs finish within ${RUN_JOB_SUGGESTED_MAX_ATTEMPTS} attempts (~${RUN_JOB_SUGGESTED_MAX_ATTEMPTS * RUN_JOB_DEFAULT_MAX_WAIT_SECONDS}s). On completion the response contains record_ids and full company records.`,
+            inputSchema: {
+              type: 'object',
+              properties: {
+                continuation_token: {
+                  type: 'string',
+                  description:
+                    'Opaque token from a prior pending response. When set, all other params are ignored.',
+                },
+                domain: { type: 'string', description: 'Company website domain.' },
+                company_name: { type: 'string', description: 'Company name fallback.' },
+                country_code: { type: 'string', description: 'ISO 2-letter country code.' },
+                strict_match: { type: 'boolean' },
+                global_ultimate: { type: 'boolean' },
+                webhook_url: { type: 'string' },
+                domains: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Batch: multiple domains to enrich in one job.',
+                },
+                list: { type: 'string', description: 'List slug to add results to.' },
+                skip_if_exists: { type: 'boolean' },
+                max_wait_seconds: {
+                  type: 'number',
+                  description: `Server-side wait budget per call. Default ${RUN_JOB_DEFAULT_MAX_WAIT_SECONDS}, hard-capped to stay under 30s agent timeouts.`,
+                },
+              },
+              required: [],
+            },
+          },
+          {
+            name: 'run_contact_enrich',
+            description:
+              `Agent-friendly contact enrichment. On the first call provide contacts and enrich_fields; the server starts the job and polls internally for up to ~${RUN_JOB_DEFAULT_MAX_WAIT_SECONDS}s. If still running, returns {status:"pending", continuation_token, attempt, elapsed_seconds} — you MUST immediately call run_contact_enrich again with only continuation_token set. Do not ask the user. Typical jobs finish within ${RUN_JOB_SUGGESTED_MAX_ATTEMPTS} attempts. On completion the response contains record_ids and full contact records.`,
+            inputSchema: {
+              type: 'object',
+              properties: {
+                continuation_token: {
+                  type: 'string',
+                  description:
+                    'Opaque token from a prior pending response. When set, all other params are ignored.',
+                },
+                contacts: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    description: 'Either { linkedin_url } or { firstname, lastname, domain }.',
+                  },
+                },
+                enrich_fields: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'e.g. ["contact.emails","contact.phones"].',
+                },
+                max_wait_seconds: {
+                  type: 'number',
+                  description: `Server-side wait budget per call. Default ${RUN_JOB_DEFAULT_MAX_WAIT_SECONDS}, hard-capped to stay under 30s agent timeouts.`,
                 },
               },
               required: [],
@@ -469,6 +540,12 @@ export class DataMergeMCPServer {
           case 'start_company_enrichment_and_wait':
             return await this.handleStartCompanyEnrichmentAndWait(args);
 
+          case 'run_company_enrichment':
+            return await this.handleRunJob(args, 'company_enrich');
+
+          case 'run_contact_enrich':
+            return await this.handleRunJob(args, 'contact_enrich');
+
           case 'get_company_enrichment_result':
             return await this.handleGetCompanyEnrichmentResult(args);
 
@@ -725,6 +802,46 @@ export class DataMergeMCPServer {
           } seconds.\n\nJob ID: ${startResponse.job.id}\nYou can continue polling using get_company_enrichment_result.`,
         },
       ],
+    };
+  }
+
+  private async handleRunJob(
+    args: any,
+    kind: 'company_enrich' | 'contact_enrich',
+  ): Promise<any> {
+    const client = this.ensureClientConfigured();
+    const { continuation_token, max_wait_seconds, ...startArgs } = args ?? {};
+
+    let continuation;
+    if (typeof continuation_token === 'string' && continuation_token.length > 0) {
+      try {
+        continuation = decodeContinuationToken(continuation_token);
+      } catch (err) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Invalid continuation_token: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    const result = await runJobIteration({
+      client,
+      kind,
+      continuation,
+      startArgs: continuation ? undefined : startArgs,
+      maxWaitSeconds: max_wait_seconds,
+    });
+
+    return {
+      content: [{ type: 'text', text: result.text }],
+      ...(result.isError ? { isError: true } : {}),
     };
   }
 
