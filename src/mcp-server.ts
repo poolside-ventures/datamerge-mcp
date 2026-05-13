@@ -12,9 +12,17 @@ import {
 /**
  * MCP Server for the DataMerge Company API
  */
+// Beta feature flag keys mirrored from datamerge-api/users/feature_flags.py.
+// Tools whose `requiresFeature` is in the user's account features are exposed;
+// others stay hidden.
+const FEATURE_LOOKALIKE_FAST = 'lookalike_fast';
+const FEATURE_CONTACT_SEARCH_UNENRICHED = 'contact_search_unenriched';
+
 export class DataMergeMCPServer {
   private server: Server;
   private client: DataMergeClient | null = null;
+  private featuresCache: Set<string> | null = null;
+  private featuresPromise: Promise<Set<string>> | null = null;
 
   constructor() {
     this.server = new Server(
@@ -34,11 +42,34 @@ export class DataMergeMCPServer {
     this.setupToolHandlers();
   }
 
+  /**
+   * Fetch the authenticated user's beta feature flags once per process,
+   * cached. If the API key is missing or the request fails, return an
+   * empty set so gated tools stay hidden.
+   */
+  private async getFeatures(): Promise<Set<string>> {
+    if (this.featuresCache) return this.featuresCache;
+    if (this.featuresPromise) return this.featuresPromise;
+    this.featuresPromise = (async () => {
+      let client: DataMergeClient;
+      try {
+        client = this.ensureClientConfigured();
+      } catch {
+        this.featuresCache = new Set();
+        return this.featuresCache;
+      }
+      const features = await client.getAccountFeatures();
+      this.featuresCache = new Set(features);
+      return this.featuresCache;
+    })();
+    return this.featuresPromise;
+  }
+
   private setupToolHandlers(): void {
     // List available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      return {
-        tools: [
+      const features = await this.getFeatures();
+      const allTools: Array<any & { __requiresFeature?: string }> = [
           {
             name: 'configure_datamerge',
             description:
@@ -521,8 +552,51 @@ export class DataMergeMCPServer {
               properties: {},
             },
           },
-        ],
-      };
+          // ----- Gated (beta) tools -----
+          {
+            name: 'company_lookalike_fast',
+            description:
+              'POST /v1/company/lookalike/fast. Synchronous lookalike that returns raw Ocean candidates without per-candidate enrichment. Lower-cost, lower-latency variant for agent use cases. Requires the lookalike_fast beta flag.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                domain: { type: 'string', description: 'Source company domain.' },
+                size: {
+                  type: 'integer',
+                  description: 'Number of candidates (1-50, default 5).',
+                },
+                companiesFilters: {
+                  type: 'object',
+                  description:
+                    'Optional Ocean v3 companiesFilters passthrough (e.g. minRelevance, headcountFrom, countries).',
+                },
+              },
+              required: ['domain'],
+            },
+            __requiresFeature: FEATURE_LOOKALIKE_FAST,
+          },
+          {
+            name: 'contact_search_unenriched',
+            description:
+              'POST /v1/contact/search/unenriched. Find contacts without running email/phone enrichment. Returns a job_id; contacts are created in unconfirmed status with stable ids. Requires the contact_search_unenriched beta flag.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                domains: { type: 'array', items: { type: 'string' } },
+                company_list: { type: 'string' },
+                max_results_per_company: { type: 'integer' },
+                job_titles: { type: 'object' },
+                location: { type: 'object' },
+                webhook: { type: 'string' },
+              },
+            },
+            __requiresFeature: FEATURE_CONTACT_SEARCH_UNENRICHED,
+          },
+        ];
+        const tools = allTools
+          .filter((t) => !t.__requiresFeature || features.has(t.__requiresFeature))
+          .map(({ __requiresFeature, ...rest }) => rest);
+        return { tools };
     });
 
     // Handle tool calls
@@ -584,6 +658,21 @@ export class DataMergeMCPServer {
 
           case 'health_check':
             return await this.handleHealthCheck(args);
+
+          case 'company_lookalike_fast': {
+            const features = await this.getFeatures();
+            if (!features.has(FEATURE_LOOKALIKE_FAST)) {
+              throw new Error(`Unknown tool: ${name}`);
+            }
+            return await this.handleCompanyLookalikeFast(args);
+          }
+          case 'contact_search_unenriched': {
+            const features = await this.getFeatures();
+            if (!features.has(FEATURE_CONTACT_SEARCH_UNENRICHED)) {
+              throw new Error(`Unknown tool: ${name}`);
+            }
+            return await this.handleContactSearchUnenriched(args);
+          }
 
           default:
             throw new Error(`Unknown tool: ${name}`);
@@ -959,7 +1048,7 @@ export class DataMergeMCPServer {
   private async handleStartLookalike(args: any): Promise<any> {
     const client = this.ensureClientConfigured();
     const response = await client.startLookalike(args ?? {});
-    if (!response.success || 'error' in response) {
+    if ('error' in response) {
       return {
         content: [{ type: 'text', text: `Lookalike request failed: ${(response as any).error}` }],
         isError: true,
@@ -981,7 +1070,7 @@ export class DataMergeMCPServer {
     const jobId = args?.job_id;
     if (!jobId) throw new Error('job_id is required');
     const response = await client.getLookalikeStatus(jobId);
-    if (!response.success || 'error' in response) {
+    if ('error' in response) {
       return {
         content: [{ type: 'text', text: `Failed to get lookalike status: ${(response as any).error}` }],
         isError: true,
@@ -995,7 +1084,7 @@ export class DataMergeMCPServer {
   private async handleContactSearch(args: any): Promise<any> {
     const client = this.ensureClientConfigured();
     const response = await client.contactSearch(args ?? {});
-    if (!response.success || 'error' in response) {
+    if ('error' in response) {
       return {
         content: [{ type: 'text', text: `Contact search failed: ${(response as any).error}` }],
         isError: true,
@@ -1014,7 +1103,7 @@ export class DataMergeMCPServer {
     const jobId = args?.job_id;
     if (!jobId) throw new Error('job_id is required');
     const response = await client.getContactSearchStatus(jobId);
-    if (!response.success || 'error' in response) {
+    if ('error' in response) {
       return {
         content: [{ type: 'text', text: `Failed to get contact search status: ${(response as any).error}` }],
         isError: true,
@@ -1026,7 +1115,7 @@ export class DataMergeMCPServer {
   private async handleContactEnrich(args: any): Promise<any> {
     const client = this.ensureClientConfigured();
     const response = await client.contactEnrich(args ?? {});
-    if (!response.success || 'error' in response) {
+    if ('error' in response) {
       return {
         content: [{ type: 'text', text: `Contact enrich failed: ${(response as any).error}` }],
         isError: true,
@@ -1045,7 +1134,7 @@ export class DataMergeMCPServer {
     const jobId = args?.job_id;
     if (!jobId) throw new Error('job_id is required');
     const response = await client.getContactEnrichStatus(jobId);
-    if (!response.success || 'error' in response) {
+    if ('error' in response) {
       return {
         content: [{ type: 'text', text: `Failed to get contact enrich status: ${(response as any).error}` }],
         isError: true,
@@ -1059,7 +1148,7 @@ export class DataMergeMCPServer {
     const recordId = args?.record_id;
     if (!recordId) throw new Error('record_id is required');
     const response = await client.getContact(recordId);
-    if (!response.success || 'error' in response) {
+    if ('error' in response) {
       return {
         content: [{ type: 'text', text: `Failed to get contact: ${(response as any).error}` }],
         isError: true,
@@ -1153,7 +1242,7 @@ export class DataMergeMCPServer {
   private async handleGetCreditsBalance(_args: any): Promise<any> {
     const client = this.ensureClientConfigured();
     const response = await client.getCreditsBalance();
-    if (!response.success || 'error' in response) {
+    if ('error' in response) {
       return {
         content: [{ type: 'text', text: `Failed to get credits balance: ${(response as any).error}` }],
         isError: true,
@@ -1180,6 +1269,63 @@ export class DataMergeMCPServer {
           text: isHealthy
             ? '✅ DataMerge API client is healthy and can connect to the API.'
             : '❌ DataMerge API client cannot connect to the API. Please check your configuration.',
+        },
+      ],
+    };
+  }
+
+  private async handleCompanyLookalikeFast(args: any): Promise<any> {
+    const client = this.ensureClientConfigured();
+    const response = await client.companyLookalikeFast({
+      domain: String(args?.domain ?? ''),
+      size: typeof args?.size === 'number' ? args.size : undefined,
+      companiesFilters:
+        args?.companiesFilters && typeof args.companiesFilters === 'object'
+          ? args.companiesFilters
+          : undefined,
+    });
+    if ('error' in response) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Fast lookalike failed: ${(response as any).error ?? 'Unknown error'}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+    const r = response as { source_domain: string; total: number; candidates: any[] };
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Found ${r.candidates.length} candidate(s) for ${r.source_domain} (total reported: ${r.total}).\n\n${JSON.stringify(r.candidates, null, 2)}`,
+        },
+      ],
+    };
+  }
+
+  private async handleContactSearchUnenriched(args: any): Promise<any> {
+    const client = this.ensureClientConfigured();
+    const response = await client.contactSearchUnenriched((args ?? {}) as Record<string, unknown>);
+    if ('error' in response) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Unenriched contact search failed: ${(response as any).error ?? 'Unknown error'}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+    const r = response as { job_id: string; status: string };
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Started unenriched contact search.\n\nJob ID: ${r.job_id}\nStatus: ${r.status}\n\nPoll /v1/contact/search/{job_id}/status; contacts will be returned in unconfirmed state.`,
         },
       ],
     };

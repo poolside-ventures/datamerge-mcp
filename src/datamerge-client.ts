@@ -640,6 +640,75 @@ export class DataMergeClient {
   }
 
   /**
+   * GET /v1/account/features. Returns the list of beta feature flag keys
+   * granted to the authenticated user, used to gate optional MCP tools.
+   */
+  async getAccountFeatures(): Promise<string[]> {
+    try {
+      const response = await this.client.get('/v1/account/features');
+      const data = response.data as any;
+      const features = Array.isArray(data?.features) ? data.features : [];
+      return features.filter((f: unknown): f is string => typeof f === 'string');
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * POST /v1/company/lookalike/fast. Synchronous lookalike. Requires the
+   * `lookalike_fast` beta feature flag on the account.
+   */
+  async companyLookalikeFast(args: {
+    domain: string;
+    size?: number;
+    companiesFilters?: Record<string, unknown>;
+  }): Promise<ApiResponse<{ source_domain: string; total: number; candidates: any[] }>> {
+    try {
+      const response = await this.client.post('/v1/company/lookalike/fast', args);
+      const data = response.data as any;
+      if (data?.error) {
+        return { success: false, error: String(data.error) } as any;
+      }
+      return {
+        success: true,
+        source_domain: data.source_domain,
+        total: data.total ?? 0,
+        candidates: Array.isArray(data.candidates) ? data.candidates : [],
+      } as any;
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.response?.data ? JSON.stringify(err.response.data) : err.message,
+      } as any;
+    }
+  }
+
+  /**
+   * POST /v1/contact/search/unenriched. Contact search without inline
+   * email/phone enrichment. Returns a job_id; contacts arrive in unconfirmed
+   * status. Requires the `contact_search_unenriched` beta feature flag.
+   */
+  async contactSearchUnenriched(args: Record<string, unknown>): Promise<ApiResponse<{ job_id: string; status: string }>> {
+    try {
+      const response = await this.client.post('/v1/contact/search/unenriched', args);
+      const data = response.data as any;
+      if (data?.error) {
+        return { success: false, error: String(data.error) } as any;
+      }
+      return {
+        success: true,
+        job_id: data.job_id,
+        status: data.status,
+      } as any;
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.response?.data ? JSON.stringify(err.response.data) : err.message,
+      } as any;
+    }
+  }
+
+  /**
    * Basic health check using the /auth/info endpoint.
    */
   async healthCheck(): Promise<boolean> {
