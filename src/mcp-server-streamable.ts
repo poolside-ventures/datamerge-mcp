@@ -535,11 +535,11 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
             .describe(
               'When true, bypass DataMerge dedup: always re-enrich every contact and charge credits, even if the same contact was enriched in the last 30 days. Use for multi-tenant resellers (e.g. Faro).',
             ),
-          confirm_no_domain: z
+          return_any_domain: z
             .boolean()
             .optional()
             .describe(
-              'Required override when any contact in `contacts[]` lacks `domain`. Server returns confirmation_required otherwise. Only set true when you genuinely do not know the company domain.',
+              'Set to true to allow enrichment for contacts that have no `domain`. FullEnrich will pick whichever current employer it considers most probable, which may not match what you expect for people with multiple plausible affiliations. Default false: server returns `status: "domain_required"` if any contact lacks `domain`.',
             ),
           max_wait_seconds: z
             .number()
