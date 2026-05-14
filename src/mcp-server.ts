@@ -264,10 +264,10 @@ export class DataMergeMCPServer {
                   description:
                     'When true, bypass DataMerge dedup: always re-enrich every contact and charge credits, even if the same contact was enriched in the last 30 days. Use for multi-tenant resellers (e.g. Faro) on a shared DataMerge account.',
                 },
-                confirm_no_domain: {
+                return_any_domain: {
                   type: 'boolean',
                   description:
-                    'Required override when any contact in `contacts[]` lacks a `domain`. The server returns a confirmation_required response otherwise. Set to true only when you genuinely do not know the contact\'s company domain.',
+                    'Set to true to allow enrichment for contacts that have no `domain`. FullEnrich will pick whichever current employer it considers most probable, which may not match what you expect for people with multiple plausible affiliations. Default false: the server returns `status: "domain_required"` if any contact lacks `domain`, prompting you to either provide one or opt into this behavior.',
                 },
                 max_wait_seconds: {
                   type: 'number',

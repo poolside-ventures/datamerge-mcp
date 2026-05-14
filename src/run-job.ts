@@ -238,6 +238,7 @@ export async function runJobIteration(args: RunJobIterationArgs): Promise<RunJob
         text: JSON.stringify({
           status: 'error',
           error: `continuation_token is for "${continuation.kind}", cannot be used with this tool ("${kind}").`,
+          credits_consumed_total: 0,
         }),
         isError: true,
       };
@@ -344,23 +345,28 @@ export const RUN_JOB_DEFAULT_MAX_WAIT_SECONDS = DEFAULT_MAX_WAIT_SECONDS;
 export const RUN_JOB_SUGGESTED_MAX_ATTEMPTS = SUGGESTED_MAX_ATTEMPTS;
 
 /**
- * Pre-flight check for run_contact_enrich: if any contact lacks a `domain`,
- * return a structured "confirmation required" payload instead of starting
- * the job. FullEnrich's most_probable_work_email is significantly more
- * reliable when the company domain is provided alongside identity fields
- * (linkedin_url or firstname+lastname) — without one, the wrong "current
- * employer" can be selected for people with multiple plausible affiliations.
+ * Pre-flight check for run_contact_enrich. Two valid call shapes:
  *
- * Returns null when the call should proceed normally:
- *   - a continuation_token is set (already in-flight),
- *   - `confirm_no_domain: true` was passed,
- *   - all contacts include a non-empty domain.
+ *   1. Caller provides `domain` for every contact. DataMerge passes the
+ *      domain hint to FullEnrich, which heavily improves email accuracy.
+ *
+ *   2. Caller sets `return_any_domain: true` and accepts that FullEnrich
+ *      will pick whichever "current employer" it considers most probable
+ *      (which may not match the caller's expectation for people with
+ *      multiple plausible affiliations).
+ *
+ * Any other shape (no domain AND no `return_any_domain: true`) gets a
+ * structured `domain_required` response that explains the choice — no
+ * job is started.
+ *
+ * Returns null when the call should proceed (continuation_token, all
+ * domains present, or `return_any_domain: true`).
  */
 export function checkContactEnrichDomains(args: any): RunJobResult | null {
   if (typeof args?.continuation_token === 'string' && args.continuation_token.length > 0) {
     return null;
   }
-  if (args?.confirm_no_domain === true) return null;
+  if (args?.return_any_domain === true) return null;
 
   const contacts = Array.isArray(args?.contacts) ? args.contacts : [];
   if (contacts.length === 0) return null;
@@ -377,15 +383,18 @@ export function checkContactEnrichDomains(args: any): RunJobResult | null {
   return {
     text: JSON.stringify(
       {
-        status: 'confirmation_required',
+        status: 'domain_required',
         message:
-          `${missing.length} contact(s) (index ${missing.join(', ')}) have no \`domain\`. ` +
-          `FullEnrich's email accuracy is much higher when a company domain is included — ` +
-          `without it, FullEnrich may pick the wrong "current employer" for people with multiple ` +
-          `plausible affiliations (a CEO who also sits on another company's board, a co-founder of two companies, etc.). ` +
-          `If you know the domain, add it to each affected contact and retry. ` +
-          `If you genuinely don't have one, retry with \`confirm_no_domain: true\` to proceed anyway.`,
+          `${missing.length} contact(s) (index ${missing.join(', ')}) have no \`domain\`. Choose one:` +
+          `\n  (a) Add the company \`domain\` to each affected contact and retry — best results.` +
+          `\n  (b) Set \`return_any_domain: true\` and retry — DataMerge will run the enrichment ` +
+          `without a domain hint, and FullEnrich will pick whichever current employer it considers ` +
+          `most probable. This may not match what you expect for people with multiple plausible ` +
+          `affiliations (a CEO who also sits on another board, a co-founder of two companies, etc.).`,
         contacts_missing_domain: missing,
+        // No enrichment ran; surface a 0-charge so billing layers always
+        // have a deterministic field to read.
+        credits_consumed_total: 0,
       },
       null,
       2,
