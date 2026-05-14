@@ -220,6 +220,11 @@ export class DataMergeMCPServer {
                 },
                 list: { type: 'string', description: 'List slug to add results to.' },
                 skip_if_exists: { type: 'boolean' },
+                refresh: {
+                  type: 'boolean',
+                  description:
+                    'When true, bypass DataMerge dedup: always re-enrich and charge credits even if the domain is already on a list. Use this for multi-tenant resellers (e.g. Faro) where another user already enriched the same domain on the shared account.',
+                },
                 max_wait_seconds: {
                   type: 'number',
                   description: `Server-side wait budget per call. Default ${RUN_JOB_DEFAULT_MAX_WAIT_SECONDS}, hard-capped to stay under 30s agent timeouts.`,
@@ -251,6 +256,64 @@ export class DataMergeMCPServer {
                   type: 'array',
                   items: { type: 'string' },
                   description: 'e.g. ["contact.emails","contact.phones"].',
+                },
+                refresh: {
+                  type: 'boolean',
+                  description:
+                    'When true, bypass DataMerge dedup: always re-enrich every contact and charge credits, even if the same contact was enriched in the last 30 days. Use for multi-tenant resellers (e.g. Faro) on a shared DataMerge account.',
+                },
+                max_wait_seconds: {
+                  type: 'number',
+                  description: `Server-side wait budget per call. Default ${RUN_JOB_DEFAULT_MAX_WAIT_SECONDS}, hard-capped to stay under 30s agent timeouts.`,
+                },
+              },
+              required: [],
+            },
+          },
+          {
+            name: 'run_contact_search',
+            description: `Agent-friendly contact search. On the first call provide domains and enrich_fields; the server starts the job and polls internally for up to ~${RUN_JOB_DEFAULT_MAX_WAIT_SECONDS}s. If still running, returns {status:"pending", continuation_token, attempt, elapsed_seconds} — you MUST immediately call run_contact_search again with only continuation_token set. Do not ask the user. On completion the response contains record_ids, full contact records, and credits_consumed_total.`,
+            inputSchema: {
+              type: 'object',
+              properties: {
+                continuation_token: {
+                  type: 'string',
+                  description: 'Opaque token from a prior pending response. When set, all other params are ignored.',
+                },
+                domains: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Company domains to search for contacts at.',
+                },
+                company_list: {
+                  type: 'string',
+                  description: 'Alternative to `domains`: company list slug.',
+                },
+                max_results_per_company: {
+                  type: 'number',
+                  description: 'Max contacts to return per company.',
+                },
+                job_titles: {
+                  type: 'object',
+                  description: 'Optional include/exclude job title filters.',
+                },
+                location: {
+                  type: 'object',
+                  description: 'Optional include/exclude location filters.',
+                },
+                enrich_fields: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'At least one of "contact.work_emails", "contact.emails", "contact.phones".',
+                },
+                list: {
+                  type: 'string',
+                  description: 'Target contact list slug for the results.',
+                },
+                refresh: {
+                  type: 'boolean',
+                  description:
+                    'When true, downstream enrichment bypasses dedup and always charges credits for each contact. Use for multi-tenant resellers (e.g. Faro).',
                 },
                 max_wait_seconds: {
                   type: 'number',
@@ -592,6 +655,30 @@ export class DataMergeMCPServer {
             },
             __requiresFeature: FEATURE_CONTACT_SEARCH_UNENRICHED,
           },
+          {
+            name: 'run_contact_search_unenriched',
+            description:
+              'POST /v1/contact/search/unenriched/sync. Synchronous unenriched contact search — returns contacts inline (no polling). Requires the contact_search_unenriched beta flag. Limits: 10 domains and max_results_per_company ≤ 10. Response includes credits_consumed_total computed as 0.5 × len(contacts).',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                domains: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Up to 10 company domains.',
+                },
+                max_results_per_company: {
+                  type: 'integer',
+                  description: 'Max contacts to return per company (1–10).',
+                },
+                job_titles: { type: 'object', description: 'Optional include/exclude job titles.' },
+                location: { type: 'object', description: 'Optional include/exclude locations.' },
+                list: { type: 'string', description: 'Target contact list slug (optional).' },
+              },
+              required: ['domains'],
+            },
+            __requiresFeature: FEATURE_CONTACT_SEARCH_UNENRICHED,
+          },
         ];
         const tools = allTools
           .filter((t) => !t.__requiresFeature || features.has(t.__requiresFeature))
@@ -619,6 +706,9 @@ export class DataMergeMCPServer {
 
           case 'run_contact_enrich':
             return await this.handleRunJob(args, 'contact_enrich');
+
+          case 'run_contact_search':
+            return await this.handleRunJob(args, 'contact_search');
 
           case 'get_company_enrichment_result':
             return await this.handleGetCompanyEnrichmentResult(args);
@@ -672,6 +762,13 @@ export class DataMergeMCPServer {
               throw new Error(`Unknown tool: ${name}`);
             }
             return await this.handleContactSearchUnenriched(args);
+          }
+          case 'run_contact_search_unenriched': {
+            const features = await this.getFeatures();
+            if (!features.has(FEATURE_CONTACT_SEARCH_UNENRICHED)) {
+              throw new Error(`Unknown tool: ${name}`);
+            }
+            return await this.handleRunContactSearchUnenriched(args);
           }
 
           default:
@@ -896,7 +993,7 @@ export class DataMergeMCPServer {
 
   private async handleRunJob(
     args: any,
-    kind: 'company_enrich' | 'contact_enrich',
+    kind: 'company_enrich' | 'contact_enrich' | 'contact_search',
   ): Promise<any> {
     const client = this.ensureClientConfigured();
     const { continuation_token, max_wait_seconds, ...startArgs } = args ?? {};
@@ -1328,6 +1425,45 @@ export class DataMergeMCPServer {
           text: `Started unenriched contact search.\n\nJob ID: ${r.job_id}\nStatus: ${r.status}\n\nPoll /v1/contact/search/{job_id}/status; contacts will be returned in unconfirmed state.`,
         },
       ],
+    };
+  }
+
+  private async handleRunContactSearchUnenriched(args: any): Promise<any> {
+    const client = this.ensureClientConfigured();
+    const response = await client.contactSearchUnenrichedSync(
+      (args ?? {}) as Record<string, unknown>,
+    );
+    if ('error' in response) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Unenriched contact search (sync) failed: ${
+              (response as any).error ?? 'Unknown error'
+            }`,
+          },
+        ],
+        isError: true,
+      };
+    }
+    const r = response as {
+      status: string;
+      total: number;
+      record_ids: string[];
+      contacts: unknown[];
+    };
+    // Faro pricing: 0.5 credits per contact returned. Computed at MCP layer; the
+    // sync endpoint itself does not charge DataMerge credits for unenriched results.
+    const creditsConsumedTotal = (r.contacts?.length ?? 0) * 0.5;
+    const payload = {
+      status: r.status,
+      total: r.total,
+      record_ids: r.record_ids,
+      contacts: r.contacts,
+      credits_consumed_total: creditsConsumedTotal,
+    };
+    return {
+      content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
     };
   }
 

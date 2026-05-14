@@ -1,6 +1,6 @@
 import type { DataMergeClient } from './datamerge-client.js';
 
-export type RunJobKind = 'company_enrich' | 'contact_enrich';
+export type RunJobKind = 'company_enrich' | 'contact_enrich' | 'contact_search';
 
 export interface ContinuationPayload {
   kind: RunJobKind;
@@ -50,6 +50,7 @@ function clampWaitSeconds(value: unknown): number {
 const TOOL_NAME_BY_KIND: Record<RunJobKind, string> = {
   company_enrich: 'run_company_enrichment',
   contact_enrich: 'run_contact_enrich',
+  contact_search: 'run_contact_search',
 };
 
 function pendingInstructionFor(kind: RunJobKind): string {
@@ -106,11 +107,23 @@ async function fetchStatus(
     }
     return { status: r.job.status ?? '', raw: r.job, success: true };
   }
+  if (kind === 'contact_search') {
+    const r = await client.getContactSearchStatus(jobId);
+    if (!r.success) {
+      return { status: '', raw: null, success: false, error: (r as any).error ?? 'Unknown error' };
+    }
+    return { status: (r as any).status ?? '', raw: r, success: true };
+  }
   const r = await client.getContactEnrichStatus(jobId);
   if (!r.success) {
     return { status: '', raw: null, success: false, error: (r as any).error ?? 'Unknown error' };
   }
   return { status: (r as any).status ?? '', raw: r, success: true };
+}
+
+function extractCreditsConsumed(raw: any): number | undefined {
+  const v = raw?.credits_consumed;
+  return typeof v === 'number' ? v : undefined;
 }
 
 async function buildCompletedPayload(
@@ -134,14 +147,16 @@ async function buildCompletedPayload(
         }
       }
     }
+    const credits = extractCreditsConsumed(job);
     return {
       status: 'completed',
       job_id: jobId,
       record_ids: recordIds,
       companies: companies.length ? companies : (job?.results ?? []),
+      ...(credits !== undefined ? { credits_consumed_total: credits } : {}),
     };
   }
-  // contact_enrich
+  // contact_enrich and contact_search both return record_ids of contacts
   const recordIds: string[] | undefined = raw?.record_ids;
   const contacts: unknown[] = [];
   if (recordIds?.length) {
@@ -153,11 +168,13 @@ async function buildCompletedPayload(
       }
     }
   }
+  const credits = extractCreditsConsumed(raw);
   return {
     status: 'completed',
     job_id: jobId,
     record_ids: recordIds,
     contacts,
+    ...(credits !== undefined ? { credits_consumed_total: credits } : {}),
   };
 }
 
@@ -172,6 +189,13 @@ async function startJob(
       return { success: false, error: (r as any).error ?? 'Unknown error' };
     }
     return { success: true, job_id: r.job.id };
+  }
+  if (kind === 'contact_search') {
+    const r = await client.contactSearch(startArgs as any);
+    if (!r.success || 'error' in r) {
+      return { success: false, error: (r as any).error ?? 'Unknown error' };
+    }
+    return { success: true, job_id: (r as any).job_id };
   }
   const r = await client.contactEnrich(startArgs as any);
   if (!r.success || 'error' in r) {
@@ -257,6 +281,9 @@ export async function runJobIteration(args: RunJobIterationArgs): Promise<RunJob
       kind === 'company_enrich'
         ? Array.isArray(status.raw?.results) && status.raw.results.length > 0
         : Array.isArray(status.raw?.record_ids) && status.raw.record_ids.length > 0;
+    // For contact_search, "completed" status from the API is authoritative; record_ids
+    // may legitimately be empty (no contacts found for any domain) and the status check
+    // already handles that via isCompletedStatus.
 
     if (isCompletedStatus(status.status, hasResult)) {
       const payload = await buildCompletedPayload(client, kind, jobId, status.raw);

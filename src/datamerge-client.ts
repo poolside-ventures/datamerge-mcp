@@ -181,11 +181,13 @@ export class DataMergeClient {
       const mappedResults = resultsSource.map((r) => this.mapCompanyRecord(r));
       const recordIds = result?.record_ids ?? raw?.record_ids;
 
+      const creditsConsumed = (raw as any).credits_consumed ?? (result as any).credits_consumed;
       const job: CompanyEnrichJobV1 = {
         id: jobId,
         status,
         results: mappedResults,
         ...(Array.isArray(recordIds) && recordIds.length > 0 ? { record_ids: recordIds } : {}),
+        ...(typeof creditsConsumed === 'number' ? { credits_consumed: creditsConsumed } : {}),
       };
 
       return {
@@ -445,6 +447,7 @@ export class DataMergeClient {
       record_ids: data.record_ids,
       type: data.type,
       message: data.message,
+      ...(typeof data.credits_consumed === 'number' ? { credits_consumed: data.credits_consumed } : {}),
     };
   }
 
@@ -491,6 +494,7 @@ export class DataMergeClient {
       record_ids: data.record_ids,
       type: data.type,
       message: data.message,
+      ...(typeof data.credits_consumed === 'number' ? { credits_consumed: data.credits_consumed } : {}),
     };
   }
 
@@ -699,6 +703,41 @@ export class DataMergeClient {
         success: true,
         job_id: data.job_id,
         status: data.status,
+      } as any;
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.response?.data ? JSON.stringify(err.response.data) : err.message,
+      } as any;
+    }
+  }
+
+  /**
+   * POST /v1/contact/search/unenriched/sync. Synchronous unenriched contact
+   * search; returns contacts inline (no job_id polling). Requires the
+   * `contact_search_unenriched` beta feature flag. Per-request caps enforced
+   * server-side (10 domains, max_results_per_company ≤ 10).
+   */
+  async contactSearchUnenrichedSync(args: Record<string, unknown>): Promise<
+    ApiResponse<{
+      status: string;
+      total: number;
+      record_ids: string[];
+      contacts: unknown[];
+    }>
+  > {
+    try {
+      const response = await this.client.post('/v1/contact/search/unenriched/sync', args);
+      const data = response.data as any;
+      if (data?.error) {
+        return { success: false, error: String(data.error) } as any;
+      }
+      return {
+        success: true,
+        status: String(data.status ?? 'completed'),
+        total: typeof data.total === 'number' ? data.total : (Array.isArray(data.contacts) ? data.contacts.length : 0),
+        record_ids: Array.isArray(data.record_ids) ? data.record_ids : [],
+        contacts: Array.isArray(data.contacts) ? data.contacts : [],
       } as any;
     } catch (err: any) {
       return {
