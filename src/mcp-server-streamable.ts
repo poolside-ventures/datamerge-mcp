@@ -461,6 +461,12 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
           domains: z.array(z.string()).optional().describe('Batch: multiple domains in one job.'),
           list: z.string().optional().describe('List slug to add enriched companies to.'),
           skip_if_exists: z.boolean().optional(),
+          refresh: z
+            .boolean()
+            .optional()
+            .describe(
+              'When true, bypass DataMerge dedup: always re-enrich and charge credits even if the domain is already on a list. Use for multi-tenant resellers (e.g. Faro).',
+            ),
           max_wait_seconds: z
             .number()
             .optional()
@@ -520,6 +526,12 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
             .array(z.string())
             .optional()
             .describe('e.g. ["contact.emails","contact.phones"].'),
+          refresh: z
+            .boolean()
+            .optional()
+            .describe(
+              'When true, bypass DataMerge dedup: always re-enrich every contact and charge credits, even if the same contact was enriched in the last 30 days. Use for multi-tenant resellers (e.g. Faro).',
+            ),
           max_wait_seconds: z
             .number()
             .optional()
@@ -549,6 +561,94 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
         const result = await runJobIteration({
           client,
           kind: 'contact_enrich',
+          continuation,
+          startArgs: continuation ? undefined : (startArgs as Record<string, unknown>),
+          maxWaitSeconds: max_wait_seconds,
+        });
+        return {
+          content: [{ type: 'text', text: result.text }],
+          ...(result.isError ? { isError: true } : {}),
+        };
+      },
+    );
+
+    this.server.registerTool(
+      'run_contact_search',
+      {
+        title: 'Run Contact Search',
+        description: `Agent-friendly contact search. On the first call provide domains and enrich_fields; the server starts the job and polls internally for up to ~${RUN_JOB_DEFAULT_MAX_WAIT_SECONDS}s. If still running, returns {status:"pending", continuation_token, attempt, elapsed_seconds} — you MUST immediately call run_contact_search again with only continuation_token set. Do not ask the user. On completion the response contains record_ids, full contact records, and credits_consumed_total.`,
+        inputSchema: {
+          continuation_token: z
+            .string()
+            .optional()
+            .describe('Opaque token from a prior pending response. When set, all other params are ignored.'),
+          domains: z
+            .array(z.string())
+            .optional()
+            .describe('Company domains to search for contacts at.'),
+          company_list: z
+            .string()
+            .optional()
+            .describe('Alternative to `domains`: company list slug.'),
+          max_results_per_company: z
+            .number()
+            .int()
+            .optional()
+            .describe('Max contacts to return per company.'),
+          job_titles: z
+            .object({
+              include: z.record(z.array(z.string())).optional(),
+              exclude: z.array(z.string()).optional(),
+            })
+            .optional()
+            .describe('Optional include/exclude job title filters.'),
+          location: z
+            .object({
+              include: z.array(z.object({ type: z.string(), value: z.string() })).optional(),
+              exclude: z.array(z.object({ type: z.string(), value: z.string() })).optional(),
+            })
+            .optional()
+            .describe('Optional include/exclude location filters.'),
+          enrich_fields: z
+            .array(z.string())
+            .optional()
+            .describe('At least one of "contact.work_emails", "contact.emails", "contact.phones".'),
+          list: z.string().optional().describe('Target contact list slug for results.'),
+          refresh: z
+            .boolean()
+            .optional()
+            .describe(
+              'When true, downstream enrichment bypasses dedup and always charges credits for each contact. Use for multi-tenant resellers (e.g. Faro).',
+            ),
+          max_wait_seconds: z
+            .number()
+            .optional()
+            .describe(`Server-side wait budget per call. Default ${RUN_JOB_DEFAULT_MAX_WAIT_SECONDS}, hard-capped to stay under 30s timeouts.`),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+      },
+      async (args, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        const { continuation_token, max_wait_seconds, ...startArgs } = args ?? {};
+        let continuation;
+        if (typeof continuation_token === 'string' && continuation_token.length > 0) {
+          try {
+            continuation = decodeContinuationToken(continuation_token);
+          } catch (err) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `Invalid continuation_token: ${err instanceof Error ? err.message : String(err)}`,
+                },
+              ],
+              isError: true,
+            };
+          }
+        }
+        const result = await runJobIteration({
+          client,
+          kind: 'contact_search',
           continuation,
           startArgs: continuation ? undefined : (startArgs as Record<string, unknown>),
           maxWaitSeconds: max_wait_seconds,
@@ -1178,6 +1278,73 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
               text: `Started unenriched contact search.\n\nJob ID: ${r.job_id}\nStatus: ${r.status}\n\nPoll /v1/contact/search/{job_id}/status; contacts arrive in unconfirmed state.`,
             },
           ],
+        };
+      },
+    );
+
+    this.server.registerTool(
+      'run_contact_search_unenriched',
+      {
+        title: 'Run Contact Search (Unenriched, Sync, Beta)',
+        description:
+          'POST /v1/contact/search/unenriched/sync. Synchronous unenriched contact search — returns contacts inline (no polling). Requires the `contact_search_unenriched` beta flag. Limits: 10 domains and max_results_per_company ≤ 10. Response includes credits_consumed_total computed as 0.5 × len(contacts).',
+        inputSchema: {
+          domains: z.array(z.string()).describe('Up to 10 company domains.'),
+          max_results_per_company: z
+            .number()
+            .int()
+            .optional()
+            .describe('Max contacts per company (1–10).'),
+          job_titles: z.record(z.any()).optional().describe('Optional include/exclude job titles.'),
+          location: z.record(z.any()).optional().describe('Optional include/exclude locations.'),
+          list: z.string().optional().describe('Target contact list slug.'),
+        },
+        annotations: { readOnlyHint: false, idempotentHint: false },
+      },
+      async (args, extra) => {
+        const client = this.getClientForSession(extra.sessionId);
+        const features = await this.getFeaturesForSession(extra.sessionId!, client);
+        if (!features.has('contact_search_unenriched')) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'run_contact_search_unenriched is a beta tool not enabled for this account. Contact DataMerge to request access.',
+              },
+            ],
+            isError: true,
+          };
+        }
+        const response = await client.contactSearchUnenrichedSync(
+          (args ?? {}) as Record<string, unknown>,
+        );
+        if ('error' in response) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Unenriched contact search (sync) failed: ${(response as any).error ?? 'Unknown error'}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+        const r = response as {
+          status: string;
+          total: number;
+          record_ids: string[];
+          contacts: unknown[];
+        };
+        const creditsConsumedTotal = (r.contacts?.length ?? 0) * 0.5;
+        const payload = {
+          status: r.status,
+          total: r.total,
+          record_ids: r.record_ids,
+          contacts: r.contacts,
+          credits_consumed_total: creditsConsumedTotal,
+        };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
         };
       },
     );

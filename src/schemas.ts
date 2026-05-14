@@ -33,6 +33,7 @@ const CompanyEnrichRequestBaseSchema = z
       .transform((val) => (val === '' ? undefined : val)),
     list: z.string().optional(),
     skip_if_exists: z.boolean().optional(),
+    refresh: z.boolean().optional(),
   })
   .catchall(z.unknown());
 
@@ -136,6 +137,8 @@ export const ContactSearchRequestV1Schema = z.object({
     .optional(),
   enrich_fields: z.array(z.string()).min(1),
   webhook: z.string().url().optional(),
+  refresh: z.boolean().optional(),
+  list: z.string().optional(),
 });
 
 export const ContactEnrichRequestV1Schema = z.object({
@@ -150,6 +153,7 @@ export const ContactEnrichRequestV1Schema = z.object({
     ]),
   ),
   enrich_fields: z.array(z.string()).min(1),
+  refresh: z.boolean().optional(),
 });
 
 // Lookalike API schemas
