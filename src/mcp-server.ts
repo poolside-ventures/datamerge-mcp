@@ -295,7 +295,15 @@ export class DataMergeMCPServer {
                 },
                 job_titles: {
                   type: 'object',
-                  description: 'Optional include/exclude job title filters.',
+                  description:
+                    'Optional. `include` is priority-keyed: {"1": ["CEO","CTO"], "2": ["VP Engineering"]} (priority "1" highest). `exclude` is a flat array of strings.',
+                  properties: {
+                    include: {
+                      type: 'object',
+                      additionalProperties: { type: 'array', items: { type: 'string' } },
+                    },
+                    exclude: { type: 'array', items: { type: 'string' } },
+                  },
                 },
                 location: {
                   type: 'object',
@@ -648,7 +656,18 @@ export class DataMergeMCPServer {
                 domains: { type: 'array', items: { type: 'string' } },
                 company_list: { type: 'string' },
                 max_results_per_company: { type: 'integer' },
-                job_titles: { type: 'object' },
+                job_titles: {
+                  type: 'object',
+                  description:
+                    '`include` is priority-keyed: {"1": ["CEO","CTO"], "2": ["VP Engineering"]} (priority "1" is highest). `exclude` is a flat array of strings.',
+                  properties: {
+                    include: {
+                      type: 'object',
+                      additionalProperties: { type: 'array', items: { type: 'string' } },
+                    },
+                    exclude: { type: 'array', items: { type: 'string' } },
+                  },
+                },
                 location: { type: 'object' },
                 webhook: { type: 'string' },
               },
@@ -671,7 +690,18 @@ export class DataMergeMCPServer {
                   type: 'integer',
                   description: 'Max contacts to return per company (1–10).',
                 },
-                job_titles: { type: 'object', description: 'Optional include/exclude job titles.' },
+                job_titles: {
+                  type: 'object',
+                  description:
+                    '`include` is priority-keyed: {"1": ["CEO","CTO"], "2": ["VP Engineering"]} (priority "1" is highest; the API flattens to a single array for this sync endpoint). `exclude` is a flat array of strings.',
+                  properties: {
+                    include: {
+                      type: 'object',
+                      additionalProperties: { type: 'array', items: { type: 'string' } },
+                    },
+                    exclude: { type: 'array', items: { type: 'string' } },
+                  },
+                },
                 location: { type: 'object', description: 'Optional include/exclude locations.' },
                 list: { type: 'string', description: 'Target contact list slug (optional).' },
               },
@@ -1393,13 +1423,16 @@ export class DataMergeMCPServer {
       };
     }
     const r = response as { source_domain: string; total: number; candidates: any[] };
+    const payload = {
+      source_domain: r.source_domain,
+      total: r.total,
+      candidates: r.candidates,
+      // No DataMerge credits charged on /v1/company/lookalike/fast; surfaced as 0
+      // so downstream billing (e.g. Faro) sees a consistent shape across run_* tools.
+      credits_consumed_total: 0,
+    };
     return {
-      content: [
-        {
-          type: 'text',
-          text: `Found ${r.candidates.length} candidate(s) for ${r.source_domain} (total reported: ${r.total}).\n\n${JSON.stringify(r.candidates, null, 2)}`,
-        },
-      ],
+      content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
     };
   }
 

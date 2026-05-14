@@ -849,7 +849,16 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
           domains: z.array(z.string()).optional().describe('Company domains to search.'),
           company_list: z.string().optional().describe('List slug instead of domains.'),
           max_results_per_company: z.number().optional().describe('Max contacts per company.'),
-          job_titles: z.record(z.any()).optional().describe('Priority tiers: include: { "1": ["CEO"], "2": ["VP Sales"] }, exclude: ["Intern"].'),
+          job_titles: z
+            .object({
+              include: z
+                .record(z.array(z.string()))
+                .optional()
+                .describe('Priority-keyed: {"1": ["CEO"], "2": ["VP Sales"]} — priority "1" is highest.'),
+              exclude: z.array(z.string()).optional(),
+            })
+            .optional()
+            .describe('Optional include/exclude job title filters.'),
           location: z.record(z.any()).optional().describe('Location filters: include/exclude with type and value (country, region, city).'),
           enrich_fields: z.array(z.string()).describe('At least one of "contact.emails" or "contact.phones". Each email costs 1 credit; phone 4 credits.'),
           webhook: z.string().optional().describe('Optional webhook URL to notify when the job completes.'),
@@ -1222,13 +1231,15 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
           };
         }
         const r = response as { source_domain: string; total: number; candidates: any[] };
+        const responsePayload = {
+          source_domain: r.source_domain,
+          total: r.total,
+          candidates: r.candidates,
+          // No DataMerge credits charged on /v1/company/lookalike/fast.
+          credits_consumed_total: 0,
+        };
         return {
-          content: [
-            {
-              type: 'text',
-              text: `Found ${r.candidates.length} candidate(s) for ${r.source_domain} (total: ${r.total}).\n\n${JSON.stringify(r.candidates, null, 2)}`,
-            },
-          ],
+          content: [{ type: 'text', text: JSON.stringify(responsePayload, null, 2) }],
         };
       },
     );
@@ -1243,7 +1254,16 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
           domains: z.array(z.string()).optional().describe('Company domains to search.'),
           company_list: z.string().optional().describe('Alternative to domains: list slug to search across.'),
           max_results_per_company: z.number().int().optional(),
-          job_titles: z.record(z.any()).optional(),
+          job_titles: z
+            .object({
+              include: z
+                .record(z.array(z.string()))
+                .optional()
+                .describe('Priority-keyed: {"1": ["CEO"], "2": ["VP"]} — priority "1" is highest.'),
+              exclude: z.array(z.string()).optional(),
+            })
+            .optional()
+            .describe('Optional include/exclude job title filters (priority-keyed include).'),
           location: z.record(z.any()).optional(),
           webhook: z.string().optional(),
         },
@@ -1295,7 +1315,18 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
             .int()
             .optional()
             .describe('Max contacts per company (1–10).'),
-          job_titles: z.record(z.any()).optional().describe('Optional include/exclude job titles.'),
+          job_titles: z
+            .object({
+              include: z
+                .record(z.array(z.string()))
+                .optional()
+                .describe(
+                  'Priority-keyed: {"1": ["CEO"], "2": ["VP"]} — priority "1" is highest. The API flattens this to a single array for the sync endpoint.',
+                ),
+              exclude: z.array(z.string()).optional(),
+            })
+            .optional()
+            .describe('Optional include/exclude job title filters.'),
           location: z.record(z.any()).optional().describe('Optional include/exclude locations.'),
           list: z.string().optional().describe('Target contact list slug.'),
         },
