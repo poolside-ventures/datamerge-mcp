@@ -252,6 +252,7 @@ export async function runJobIteration(args: RunJobIterationArgs): Promise<RunJob
         text: JSON.stringify({
           status: 'error',
           error: 'Either continuation_token or start parameters must be provided.',
+          credits_consumed_total: 0,
         }),
         isError: true,
       };
@@ -259,7 +260,11 @@ export async function runJobIteration(args: RunJobIterationArgs): Promise<RunJob
     const started = await startJob(client, kind, startArgs);
     if (!started.success || !started.job_id) {
       return {
-        text: JSON.stringify({ status: 'error', error: started.error ?? 'Failed to start job' }),
+        text: JSON.stringify({
+          status: 'error',
+          error: started.error ?? 'Failed to start job',
+          credits_consumed_total: 0,
+        }),
         isError: true,
       };
     }
@@ -281,6 +286,7 @@ export async function runJobIteration(args: RunJobIterationArgs): Promise<RunJob
           status: 'error',
           job_id: jobId,
           error: status.error ?? 'Failed to fetch job status',
+          credits_consumed_total: 0,
         }),
         isError: true,
       };
@@ -300,11 +306,15 @@ export async function runJobIteration(args: RunJobIterationArgs): Promise<RunJob
     }
 
     if (isFailedStatus(status.status)) {
+      // Surface the API's reported charge if any (we don't want to silently
+      // claim 0 if DataMerge charged before the job failed).
+      const failedCredits = extractCreditsConsumed(status.raw) ?? 0;
       return {
         text: JSON.stringify({
           status: 'failed',
           job_id: jobId,
           job_status: status.status,
+          credits_consumed_total: failedCredits,
         }),
         isError: true,
       };
@@ -334,6 +344,9 @@ export async function runJobIteration(args: RunJobIterationArgs): Promise<RunJob
         elapsed_seconds: elapsedSeconds,
         suggested_max_attempts: SUGGESTED_MAX_ATTEMPTS,
         next_action: pendingInstructionFor(kind),
+        // No charge has happened at MCP layer yet; included so billing
+        // layers can read one consistent field across all response shapes.
+        credits_consumed_total: 0,
       },
       null,
       2,
