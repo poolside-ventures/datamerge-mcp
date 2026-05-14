@@ -7,6 +7,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { DataMergeClient } from './datamerge-client.js';
 import { InMemoryEventStore } from './in-memory-event-store.js';
 import {
+  checkContactEnrichDomains,
   decodeContinuationToken,
   runJobIteration,
   RUN_JOB_DEFAULT_MAX_WAIT_SECONDS,
@@ -521,7 +522,9 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
           contacts: z
             .array(z.record(z.any()))
             .optional()
-            .describe('Array of contacts: either { linkedin_url } or { firstname, lastname, domain }.'),
+            .describe(
+              'Array of contacts. Identify each with `linkedin_url` and/or (`firstname`+`lastname`). ALWAYS include `domain` (company website) when you know it — FullEnrich\'s email accuracy drops sharply without a domain hint.',
+            ),
           enrich_fields: z
             .array(z.string())
             .optional()
@@ -532,6 +535,12 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
             .describe(
               'When true, bypass DataMerge dedup: always re-enrich every contact and charge credits, even if the same contact was enriched in the last 30 days. Use for multi-tenant resellers (e.g. Faro).',
             ),
+          confirm_no_domain: z
+            .boolean()
+            .optional()
+            .describe(
+              'Required override when any contact in `contacts[]` lacks `domain`. Server returns confirmation_required otherwise. Only set true when you genuinely do not know the company domain.',
+            ),
           max_wait_seconds: z
             .number()
             .optional()
@@ -541,6 +550,10 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
       },
       async (args, extra) => {
         const client = this.getClientForSession(extra.sessionId);
+        const gate = checkContactEnrichDomains(args);
+        if (gate) {
+          return { content: [{ type: 'text', text: gate.text }] };
+        }
         const { continuation_token, max_wait_seconds, ...startArgs } = args ?? {};
         let continuation;
         if (typeof continuation_token === 'string' && continuation_token.length > 0) {
