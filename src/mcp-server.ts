@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { DataMergeClient } from './datamerge-client.js';
 import {
+  checkContactEnrichDomains,
   decodeContinuationToken,
   runJobIteration,
   RUN_JOB_DEFAULT_MAX_WAIT_SECONDS,
@@ -249,7 +250,8 @@ export class DataMergeMCPServer {
                   type: 'array',
                   items: {
                     type: 'object',
-                    description: 'Either { linkedin_url } or { firstname, lastname, domain }.',
+                    description:
+                      'Identify the contact with `linkedin_url` and/or (`firstname`+`lastname`). ALWAYS pass `domain` (company website) too when you know it — FullEnrich\'s email accuracy drops sharply without a domain hint (it can pick the wrong "current employer" for people with multiple affiliations).',
                   },
                 },
                 enrich_fields: {
@@ -261,6 +263,11 @@ export class DataMergeMCPServer {
                   type: 'boolean',
                   description:
                     'When true, bypass DataMerge dedup: always re-enrich every contact and charge credits, even if the same contact was enriched in the last 30 days. Use for multi-tenant resellers (e.g. Faro) on a shared DataMerge account.',
+                },
+                confirm_no_domain: {
+                  type: 'boolean',
+                  description:
+                    'Required override when any contact in `contacts[]` lacks a `domain`. The server returns a confirmation_required response otherwise. Set to true only when you genuinely do not know the contact\'s company domain.',
                 },
                 max_wait_seconds: {
                   type: 'number',
@@ -734,8 +741,13 @@ export class DataMergeMCPServer {
           case 'run_company_enrichment':
             return await this.handleRunJob(args, 'company_enrich');
 
-          case 'run_contact_enrich':
+          case 'run_contact_enrich': {
+            const gate = checkContactEnrichDomains(args);
+            if (gate) {
+              return { content: [{ type: 'text', text: gate.text }] };
+            }
             return await this.handleRunJob(args, 'contact_enrich');
+          }
 
           case 'run_contact_search':
             return await this.handleRunJob(args, 'contact_search');

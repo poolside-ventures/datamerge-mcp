@@ -80,14 +80,22 @@ export interface RunJobResult {
   isError?: boolean;
 }
 
-function isCompletedStatus(status: string, hasResult: boolean): boolean {
+function isCompletedStatus(
+  status: string,
+  hasResult: boolean,
+  kind: RunJobKind,
+): boolean {
   const s = (status || '').toLowerCase();
-  return (
-    s === 'completed' ||
-    s === 'succeeded' ||
-    s === 'finished' ||
-    (hasResult && s !== 'failed' && s !== 'error' && s !== 'errored' && s !== 'cancelled')
-  );
+  if (s === 'completed' || s === 'succeeded' || s === 'finished') return true;
+  // The `hasResult` fallback is only safe for company_enrich, where the status
+  // response inlines `results[]` exactly when the job is actually done. For
+  // contact_enrich and contact_search the API pre-populates `record_ids` with
+  // pending ContactRecords created *before* FullEnrich is called, so
+  // record_ids.length > 0 fires immediately after POST and the agent would
+  // get back stale/empty rows. For those kinds, require an explicit
+  // "completed" status.
+  if (kind !== 'company_enrich') return false;
+  return hasResult && s !== 'failed' && s !== 'error' && s !== 'errored' && s !== 'cancelled';
 }
 
 function isFailedStatus(status: string): boolean {
@@ -285,7 +293,7 @@ export async function runJobIteration(args: RunJobIterationArgs): Promise<RunJob
     // may legitimately be empty (no contacts found for any domain) and the status check
     // already handles that via isCompletedStatus.
 
-    if (isCompletedStatus(status.status, hasResult)) {
+    if (isCompletedStatus(status.status, hasResult, kind)) {
       const payload = await buildCompletedPayload(client, kind, jobId, status.raw);
       return { text: JSON.stringify(payload, null, 2) };
     }
@@ -334,3 +342,53 @@ export async function runJobIteration(args: RunJobIterationArgs): Promise<RunJob
 
 export const RUN_JOB_DEFAULT_MAX_WAIT_SECONDS = DEFAULT_MAX_WAIT_SECONDS;
 export const RUN_JOB_SUGGESTED_MAX_ATTEMPTS = SUGGESTED_MAX_ATTEMPTS;
+
+/**
+ * Pre-flight check for run_contact_enrich: if any contact lacks a `domain`,
+ * return a structured "confirmation required" payload instead of starting
+ * the job. FullEnrich's most_probable_work_email is significantly more
+ * reliable when the company domain is provided alongside identity fields
+ * (linkedin_url or firstname+lastname) — without one, the wrong "current
+ * employer" can be selected for people with multiple plausible affiliations.
+ *
+ * Returns null when the call should proceed normally:
+ *   - a continuation_token is set (already in-flight),
+ *   - `confirm_no_domain: true` was passed,
+ *   - all contacts include a non-empty domain.
+ */
+export function checkContactEnrichDomains(args: any): RunJobResult | null {
+  if (typeof args?.continuation_token === 'string' && args.continuation_token.length > 0) {
+    return null;
+  }
+  if (args?.confirm_no_domain === true) return null;
+
+  const contacts = Array.isArray(args?.contacts) ? args.contacts : [];
+  if (contacts.length === 0) return null;
+
+  const missing: number[] = [];
+  contacts.forEach((c: any, i: number) => {
+    if (!c || typeof c !== 'object') return;
+    const d = c.domain;
+    if (typeof d !== 'string' || d.trim().length === 0) missing.push(i);
+  });
+
+  if (missing.length === 0) return null;
+
+  return {
+    text: JSON.stringify(
+      {
+        status: 'confirmation_required',
+        message:
+          `${missing.length} contact(s) (index ${missing.join(', ')}) have no \`domain\`. ` +
+          `FullEnrich's email accuracy is much higher when a company domain is included — ` +
+          `without it, FullEnrich may pick the wrong "current employer" for people with multiple ` +
+          `plausible affiliations (a CEO who also sits on another company's board, a co-founder of two companies, etc.). ` +
+          `If you know the domain, add it to each affected contact and retry. ` +
+          `If you genuinely don't have one, retry with \`confirm_no_domain: true\` to proceed anyway.`,
+        contacts_missing_domain: missing,
+      },
+      null,
+      2,
+    ),
+  };
+}
