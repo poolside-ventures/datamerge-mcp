@@ -6,12 +6,12 @@ metadata:
   author: datamerge
 ---
 
-You have access to the DataMerge MCP server (mcp.datamerge.ai). Use it to enrich company data, find contacts at target companies, discover lookalike companies, and manage lists of accounts.
+You have access to the DataMerge MCP server (mcp.datamerge.ai). Use it to enrich company data, find contacts at target companies, and manage lists of accounts.
 
 ## When to activate
 - User wants to enrich a company by domain or name
 - User needs to find contacts (emails, phone numbers) at a company
-- User wants to build a list of target accounts or lookalike companies
+- User wants to build a list of target accounts
 - User asks about company data, firmographics, or company hierarchy
 - User mentions "DataMerge" or wants to look up B2B contact information
 - User is doing sales prospecting, lead research, or account research
@@ -38,11 +38,6 @@ DataMerge requires an API key. Call configure_datamerge with the user's API key 
 2. Poll get_contact_search_status until status is "completed"
 3. Use get_contact with each record_id to retrieve contact details (free)
 4. Use job_titles to filter by seniority/role (e.g. CEO, VP Sales, Head of Marketing)
-
-### Find lookalike companies
-1. Call start_lookalike with companiesFilters.lookalikeDomains (seed domains), and optional size/filters
-2. Poll get_lookalike_status until completed
-3. Results include record_ids - use get_company to fetch each one (free after enrichment)
 
 ### Company hierarchy
 1. Enrich the company first to get a datamerge_id

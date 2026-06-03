@@ -19,8 +19,6 @@ import {
   ListCreateRequestV1,
   ListItemsParamsV1,
   ListRecordV1,
-  LookalikeJobResponseV1,
-  LookalikeRequestV1,
   StatusResponseV1,
 } from './types.js';
 import {
@@ -32,7 +30,6 @@ import {
   DataMergeConfigSchema,
   ListCreateRequestV1Schema,
   ListItemsParamsV1Schema,
-  LookalikeRequestV1Schema,
 } from './schemas.js';
 
 /**
@@ -353,54 +350,6 @@ export class DataMergeClient {
   }
 
   // -------------------------------------------------------------------------
-  // Lookalike API
-  // -------------------------------------------------------------------------
-
-  /**
-   * Start a lookalike companies job (POST /v1/company/lookalike). Returns job_id.
-   */
-  async startLookalike(
-    request: LookalikeRequestV1,
-  ): Promise<ApiResponse<LookalikeJobResponseV1>> {
-    const validated = LookalikeRequestV1Schema.parse(request);
-    const response = await this.client.post('/v1/company/lookalike', validated);
-    const data = response.data as any;
-    if (data?.error) {
-      return { success: false, error: String(data.error) } as ApiResponse<LookalikeJobResponseV1>;
-    }
-    return {
-      success: true,
-      job_id: String(data.job_id ?? data.id ?? ''),
-      status: String(data.status ?? 'queued'),
-      message: data.message,
-      record_ids: data.record_ids,
-    };
-  }
-
-  /**
-   * Get lookalike job status (GET /v1/company/lookalike/{job_id}/status).
-   */
-  async getLookalikeStatus(
-    jobId: string,
-  ): Promise<ApiResponse<LookalikeJobResponseV1>> {
-    if (!jobId) throw new Error('job_id is required');
-    const response = await this.client.get(
-      `/v1/company/lookalike/${encodeURIComponent(jobId)}/status`,
-    );
-    const data = response.data as any;
-    if (data?.error) {
-      return { success: false, error: String(data.error) } as ApiResponse<LookalikeJobResponseV1>;
-    }
-    return {
-      success: true,
-      job_id: String(data.job_id ?? data.id ?? jobId),
-      status: String(data.status ?? ''),
-      message: data.message,
-      record_ids: data.record_ids,
-    };
-  }
-
-  // -------------------------------------------------------------------------
   // Contact API
   // -------------------------------------------------------------------------
 
@@ -655,35 +604,6 @@ export class DataMergeClient {
       return features.filter((f: unknown): f is string => typeof f === 'string');
     } catch {
       return [];
-    }
-  }
-
-  /**
-   * POST /v1/company/lookalike/fast. Synchronous lookalike. Requires the
-   * `lookalike_fast` beta feature flag on the account.
-   */
-  async companyLookalikeFast(args: {
-    domain: string;
-    size?: number;
-    companiesFilters?: Record<string, unknown>;
-  }): Promise<ApiResponse<{ source_domain: string; total: number; candidates: any[] }>> {
-    try {
-      const response = await this.client.post('/v1/company/lookalike/fast', args);
-      const data = response.data as any;
-      if (data?.error) {
-        return { success: false, error: String(data.error) } as any;
-      }
-      return {
-        success: true,
-        source_domain: data.source_domain,
-        total: data.total ?? 0,
-        candidates: Array.isArray(data.candidates) ? data.candidates : [],
-      } as any;
-    } catch (err: any) {
-      return {
-        success: false,
-        error: err.response?.data ? JSON.stringify(err.response.data) : err.message,
-      } as any;
     }
   }
 

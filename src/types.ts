@@ -241,35 +241,6 @@ export interface ContactGetResponseV1 {
 }
 
 // ---------------------------------------------------------------------------
-// Lookalike API
-// ---------------------------------------------------------------------------
-
-export interface LookalikeCompaniesFiltersV1 {
-  lookalikeDomains?: string[];
-  primaryLocations?: { includeCountries?: string[]; excludeCountries?: string[] };
-  companySizes?: string[];
-  revenues?: string[];
-  yearFounded?: { min?: number; max?: number };
-  [key: string]: unknown;
-}
-
-export interface LookalikeRequestV1 {
-  companiesFilters: LookalikeCompaniesFiltersV1;
-  size?: number;
-  list?: string;
-  exclude_all?: boolean;
-  [key: string]: unknown;
-}
-
-export interface LookalikeJobResponseV1 {
-  job_id: string;
-  status: string;
-  message?: string;
-  record_ids?: string[];
-  [key: string]: unknown;
-}
-
-// ---------------------------------------------------------------------------
 // Lists API
 // ---------------------------------------------------------------------------
 

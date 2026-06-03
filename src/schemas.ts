@@ -156,27 +156,6 @@ export const ContactEnrichRequestV1Schema = z.object({
   refresh: z.boolean().optional(),
 });
 
-// Lookalike API schemas
-export const LookalikeCompaniesFiltersV1Schema = z.object({
-  lookalikeDomains: z.array(z.string()).optional(),
-  primaryLocations: z
-    .object({
-      includeCountries: z.array(z.string()).optional(),
-      excludeCountries: z.array(z.string()).optional(),
-    })
-    .optional(),
-  companySizes: z.array(z.string()).optional(),
-  revenues: z.array(z.string()).optional(),
-  yearFounded: z.object({ min: z.number().optional(), max: z.number().optional() }).optional(),
-});
-
-export const LookalikeRequestV1Schema = z.object({
-  companiesFilters: LookalikeCompaniesFiltersV1Schema,
-  size: z.number().int().optional(),
-  list: z.string().optional(),
-  exclude_all: z.boolean().optional(),
-});
-
 // Lists API schemas
 export const ListCreateRequestV1Schema = z.object({
   name: z.string().min(1),
@@ -202,7 +181,6 @@ export type ValidatedCompanyHierarchyParamsV1 = z.infer<typeof CompanyHierarchyP
 export type ValidatedDataMergeConfig = z.infer<typeof DataMergeConfigSchema>;
 export type ValidatedContactSearchRequestV1 = z.infer<typeof ContactSearchRequestV1Schema>;
 export type ValidatedContactEnrichRequestV1 = z.infer<typeof ContactEnrichRequestV1Schema>;
-export type ValidatedLookalikeRequestV1 = z.infer<typeof LookalikeRequestV1Schema>;
 export type ValidatedListCreateRequestV1 = z.infer<typeof ListCreateRequestV1Schema>;
 export type ValidatedListItemsParamsV1 = z.infer<typeof ListItemsParamsV1Schema>;
 

@@ -16,7 +16,6 @@ import {
 // Beta feature flag keys mirrored from datamerge-api/users/feature_flags.py.
 // Tools whose `requiresFeature` is in the user's account features are exposed;
 // others stay hidden.
-const FEATURE_LOOKALIKE_FAST = 'lookalike_fast';
 const FEATURE_CONTACT_SEARCH_UNENRICHED = 'contact_search_unenriched';
 
 export class DataMergeMCPServer {
@@ -405,55 +404,6 @@ export class DataMergeMCPServer {
             },
           },
           {
-            name: 'start_lookalike',
-            description:
-              'POST /v1/company/lookalike. Find similar companies using seed domains. Returns a job_id (async, 202). Poll GET /v1/company/lookalike/{job_id}/status until completed or failed.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                companiesFilters: {
-                  type: 'object',
-                  description: 'Filters for lookalike search.',
-                  properties: {
-                    lookalikeDomains: {
-                      type: 'array',
-                      items: { type: 'string' },
-                      description: 'Seed domains (e.g. ["stripe.com"]).',
-                    },
-                    primaryLocations: {
-                      type: 'object',
-                      properties: {
-                        includeCountries: { type: 'array', items: { type: 'string' } },
-                        excludeCountries: { type: 'array', items: { type: 'string' } },
-                      },
-                    },
-                    companySizes: { type: 'array', items: { type: 'string' } },
-                    revenues: { type: 'array', items: { type: 'string' } },
-                    yearFounded: {
-                      type: 'object',
-                      properties: { min: { type: 'number' }, max: { type: 'number' } },
-                    },
-                  },
-                },
-                size: { type: 'number', description: 'Max number of lookalikes to return (e.g. 50).' },
-                list: { type: 'string', description: 'List slug to add results to.' },
-                exclude_all: { type: 'boolean', description: 'Exclude companies already in list.' },
-              },
-              required: ['companiesFilters'],
-            },
-          },
-          {
-            name: 'get_lookalike_status',
-            description: 'GET /v1/company/lookalike/{job_id}/status. Poll until status is "completed" or "failed". Response includes record_ids.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                job_id: { type: 'string', description: 'Lookalike job ID.' },
-              },
-              required: ['job_id'],
-            },
-          },
-          {
             name: 'contact_search',
             description:
               'POST /v1/contact/search. Search for contacts at specified companies. Returns a job_id (async, 202). enrich_fields required (at least one of contact.emails or contact.phones). Use company_list (slug) instead of domains to search a saved list.',
@@ -632,28 +582,6 @@ export class DataMergeMCPServer {
           },
           // ----- Gated (beta) tools -----
           {
-            name: 'company_lookalike_fast',
-            description:
-              'POST /v1/company/lookalike/fast. Synchronous lookalike that returns raw Ocean candidates without per-candidate enrichment. Lower-cost, lower-latency variant for agent use cases. Requires the lookalike_fast beta flag.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                domain: { type: 'string', description: 'Source company domain.' },
-                size: {
-                  type: 'integer',
-                  description: 'Number of candidates (1-50, default 5).',
-                },
-                companiesFilters: {
-                  type: 'object',
-                  description:
-                    'Optional Ocean v3 companiesFilters passthrough (e.g. minRelevance, headcountFrom, countries).',
-                },
-              },
-              required: ['domain'],
-            },
-            __requiresFeature: FEATURE_LOOKALIKE_FAST,
-          },
-          {
             name: 'contact_search_unenriched',
             description:
               'POST /v1/contact/search/unenriched. Find contacts without running email/phone enrichment. Returns a job_id; contacts are created in unconfirmed status with stable ids. Requires the contact_search_unenriched beta flag.',
@@ -761,10 +689,6 @@ export class DataMergeMCPServer {
           case 'get_company_hierarchy':
             return await this.handleGetCompanyHierarchy(args);
 
-          case 'start_lookalike':
-            return await this.handleStartLookalike(args);
-          case 'get_lookalike_status':
-            return await this.handleGetLookalikeStatus(args);
           case 'contact_search':
             return await this.handleContactSearch(args);
           case 'get_contact_search_status':
@@ -791,13 +715,6 @@ export class DataMergeMCPServer {
           case 'health_check':
             return await this.handleHealthCheck(args);
 
-          case 'company_lookalike_fast': {
-            const features = await this.getFeatures();
-            if (!features.has(FEATURE_LOOKALIKE_FAST)) {
-              throw new Error(`Unknown tool: ${name}`);
-            }
-            return await this.handleCompanyLookalikeFast(args);
-          }
           case 'contact_search_unenriched': {
             const features = await this.getFeatures();
             if (!features.has(FEATURE_CONTACT_SEARCH_UNENRICHED)) {
@@ -1184,42 +1101,6 @@ export class DataMergeMCPServer {
     };
   }
 
-  private async handleStartLookalike(args: any): Promise<any> {
-    const client = this.ensureClientConfigured();
-    const response = await client.startLookalike(args ?? {});
-    if ('error' in response) {
-      return {
-        content: [{ type: 'text', text: `Lookalike request failed: ${(response as any).error}` }],
-        isError: true,
-      };
-    }
-    const r = response as { job_id: string; status: string; message?: string };
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Started lookalike job.\n\nJob ID: ${r.job_id}\nStatus: ${r.status}${r.message ? `\n${r.message}` : ''}`,
-        },
-      ],
-    };
-  }
-
-  private async handleGetLookalikeStatus(args: any): Promise<any> {
-    const client = this.ensureClientConfigured();
-    const jobId = args?.job_id;
-    if (!jobId) throw new Error('job_id is required');
-    const response = await client.getLookalikeStatus(jobId);
-    if ('error' in response) {
-      return {
-        content: [{ type: 'text', text: `Failed to get lookalike status: ${(response as any).error}` }],
-        isError: true,
-      };
-    }
-    return {
-      content: [{ type: 'text', text: JSON.stringify(response, null, 2) }],
-    };
-  }
-
   private async handleContactSearch(args: any): Promise<any> {
     const client = this.ensureClientConfigured();
     const response = await client.contactSearch(args ?? {});
@@ -1410,41 +1291,6 @@ export class DataMergeMCPServer {
             : '❌ DataMerge API client cannot connect to the API. Please check your configuration.',
         },
       ],
-    };
-  }
-
-  private async handleCompanyLookalikeFast(args: any): Promise<any> {
-    const client = this.ensureClientConfigured();
-    const response = await client.companyLookalikeFast({
-      domain: String(args?.domain ?? ''),
-      size: typeof args?.size === 'number' ? args.size : undefined,
-      companiesFilters:
-        args?.companiesFilters && typeof args.companiesFilters === 'object'
-          ? args.companiesFilters
-          : undefined,
-    });
-    if ('error' in response) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Fast lookalike failed: ${(response as any).error ?? 'Unknown error'}`,
-          },
-        ],
-        isError: true,
-      };
-    }
-    const r = response as { source_domain: string; total: number; candidates: any[] };
-    const payload = {
-      source_domain: r.source_domain,
-      total: r.total,
-      candidates: r.candidates,
-      // No DataMerge credits charged on /v1/company/lookalike/fast; surfaced as 0
-      // so downstream billing (e.g. Faro) sees a consistent shape across run_* tools.
-      credits_consumed_total: 0,
-    };
-    return {
-      content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
     };
   }
 

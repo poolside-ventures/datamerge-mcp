@@ -798,60 +798,6 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
       },
     );
 
-    // Lookalike
-    this.server.registerTool(
-      'start_lookalike',
-      {
-        title: 'Start Lookalike',
-        description: 'POST /v1/company/lookalike. Find similar companies using seed domains. Returns a job_id (async, 202). Poll GET /v1/company/lookalike/{job_id}/status until completed or failed.',
-        inputSchema: {
-          companiesFilters: z.record(z.any()).describe('Filters object: lookalikeDomains (seed domains), primaryLocations, companySizes, revenues, yearFounded.'),
-          size: z.number().optional().describe('Maximum number of lookalike companies to return (e.g. 50).'),
-          list: z.string().optional().describe('List slug to add results to.'),
-          exclude_all: z.boolean().optional().describe('When true, exclude companies already in the list.'),
-        },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
-      },
-      async (args, extra) => {
-        const client = this.getClientForSession(extra.sessionId);
-        const response = await client.startLookalike((args ?? {}) as import('./types.js').LookalikeRequestV1);
-        if (!response.success || 'error' in response) {
-          return {
-            content: [{ type: 'text', text: `Lookalike failed: ${(response as any).error}` }],
-            isError: true,
-          };
-        }
-        const r = response as { job_id: string; status: string; message?: string };
-        return {
-          content: [
-            { type: 'text', text: `Started lookalike job.\n\nJob ID: ${r.job_id}\nStatus: ${r.status}${r.message ? `\n${r.message}` : ''}` },
-          ],
-        };
-      },
-    );
-
-    this.server.registerTool(
-      'get_lookalike_status',
-      {
-        title: 'Get Lookalike Status',
-        description: 'GET /v1/company/lookalike/{job_id}/status. Poll until status is "completed" or "failed". Response includes record_ids.',
-        inputSchema: { job_id: z.string().describe('The lookalike job ID returned by start_lookalike. Poll until status is "completed" or "failed".') },
-        annotations: { readOnlyHint: true },
-      },
-      async ({ job_id }, extra) => {
-        const client = this.getClientForSession(extra.sessionId);
-        if (!job_id) throw new Error('job_id is required');
-        const response = await client.getLookalikeStatus(job_id);
-        if (!response.success || 'error' in response) {
-          return {
-            content: [{ type: 'text', text: `Failed: ${(response as any).error}` }],
-            isError: true,
-          };
-        }
-        return { content: [{ type: 'text', text: JSON.stringify(response, null, 2) }] };
-      },
-    );
-
     // Contact search
     this.server.registerTool(
       'contact_search',
@@ -1197,66 +1143,6 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
     // key by reading /v1/account/features; sessions without the flag receive
     // an "access denied" error. The underlying API endpoints also 404
     // unflagged calls, so the gating is defense-in-depth.
-    this.server.registerTool(
-      'company_lookalike_fast',
-      {
-        title: 'Company Lookalike (Fast, Beta)',
-        description:
-          'POST /v1/company/lookalike/fast. Synchronous lookalike returning raw Ocean candidates without per-candidate enrichment. Lower-latency, lower-cost variant for agent use cases. BETA: requires the `lookalike_fast` flag on the account.',
-        inputSchema: {
-          domain: z.string().describe('Source company domain.'),
-          size: z.number().int().min(1).max(50).optional().describe('Number of candidates (1-50, default 5).'),
-          companiesFilters: z
-            .record(z.any())
-            .optional()
-            .describe('Optional Ocean v3 companiesFilters passthrough (e.g. minRelevance, headcountFrom, countries).'),
-        },
-        annotations: { readOnlyHint: true, idempotentHint: true },
-      },
-      async (args, extra) => {
-        const client = this.getClientForSession(extra.sessionId);
-        const features = await this.getFeaturesForSession(extra.sessionId!, client);
-        if (!features.has('lookalike_fast')) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: 'company_lookalike_fast is a beta tool not enabled for this account. Contact DataMerge to request access.',
-              },
-            ],
-            isError: true,
-          };
-        }
-        const payload: {
-          domain: string;
-          size?: number;
-          companiesFilters?: Record<string, unknown>;
-        } = { domain: String(args?.domain ?? '') };
-        if (typeof args?.size === 'number') payload.size = args.size;
-        if (args?.companiesFilters && typeof args.companiesFilters === 'object') {
-          payload.companiesFilters = args.companiesFilters as Record<string, unknown>;
-        }
-        const response = await client.companyLookalikeFast(payload);
-        if ('error' in response) {
-          return {
-            content: [{ type: 'text', text: `Fast lookalike failed: ${(response as any).error}` }],
-            isError: true,
-          };
-        }
-        const r = response as { source_domain: string; total: number; candidates: any[] };
-        const responsePayload = {
-          source_domain: r.source_domain,
-          total: r.total,
-          candidates: r.candidates,
-          // No DataMerge credits charged on /v1/company/lookalike/fast.
-          credits_consumed_total: 0,
-        };
-        return {
-          content: [{ type: 'text', text: JSON.stringify(responsePayload, null, 2) }],
-        };
-      },
-    );
-
     this.server.registerTool(
       'contact_search_unenriched',
       {
