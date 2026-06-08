@@ -161,7 +161,7 @@ async function buildCompletedPayload(
       job_id: jobId,
       record_ids: recordIds,
       companies: companies.length ? companies : (job?.results ?? []),
-      ...(credits !== undefined ? { credits_consumed_total: credits } : {}),
+      ...(credits !== undefined ? { credits_consumed: credits } : {}),
     };
   }
   // contact_enrich and contact_search both return record_ids of contacts
@@ -182,7 +182,7 @@ async function buildCompletedPayload(
     job_id: jobId,
     record_ids: recordIds,
     contacts,
-    ...(credits !== undefined ? { credits_consumed_total: credits } : {}),
+    ...(credits !== undefined ? { credits_consumed: credits } : {}),
   };
 }
 
@@ -238,7 +238,7 @@ export async function runJobIteration(args: RunJobIterationArgs): Promise<RunJob
         text: JSON.stringify({
           status: 'error',
           error: `continuation_token is for "${continuation.kind}", cannot be used with this tool ("${kind}").`,
-          credits_consumed_total: 0,
+          credits_consumed: 0,
         }),
         isError: true,
       };
@@ -252,7 +252,7 @@ export async function runJobIteration(args: RunJobIterationArgs): Promise<RunJob
         text: JSON.stringify({
           status: 'error',
           error: 'Either continuation_token or start parameters must be provided.',
-          credits_consumed_total: 0,
+          credits_consumed: 0,
         }),
         isError: true,
       };
@@ -263,7 +263,7 @@ export async function runJobIteration(args: RunJobIterationArgs): Promise<RunJob
         text: JSON.stringify({
           status: 'error',
           error: started.error ?? 'Failed to start job',
-          credits_consumed_total: 0,
+          credits_consumed: 0,
         }),
         isError: true,
       };
@@ -286,7 +286,7 @@ export async function runJobIteration(args: RunJobIterationArgs): Promise<RunJob
           status: 'error',
           job_id: jobId,
           error: status.error ?? 'Failed to fetch job status',
-          credits_consumed_total: 0,
+          credits_consumed: 0,
         }),
         isError: true,
       };
@@ -314,7 +314,7 @@ export async function runJobIteration(args: RunJobIterationArgs): Promise<RunJob
           status: 'failed',
           job_id: jobId,
           job_status: status.status,
-          credits_consumed_total: failedCredits,
+          credits_consumed: failedCredits,
         }),
         isError: true,
       };
@@ -346,7 +346,7 @@ export async function runJobIteration(args: RunJobIterationArgs): Promise<RunJob
         next_action: pendingInstructionFor(kind),
         // No charge has happened at MCP layer yet; included so billing
         // layers can read one consistent field across all response shapes.
-        credits_consumed_total: 0,
+        credits_consumed: 0,
       },
       null,
       2,
@@ -407,7 +407,7 @@ export function checkContactEnrichDomains(args: any): RunJobResult | null {
         contacts_missing_domain: missing,
         // No enrichment ran; surface a 0-charge so billing layers always
         // have a deterministic field to read.
-        credits_consumed_total: 0,
+        credits_consumed: 0,
       },
       null,
       2,

@@ -589,7 +589,7 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
       'run_contact_search',
       {
         title: 'Run Contact Search',
-        description: `Agent-friendly contact search. On the first call provide domains and enrich_fields; the server starts the job and polls internally for up to ~${RUN_JOB_DEFAULT_MAX_WAIT_SECONDS}s. If still running, returns {status:"pending", continuation_token, attempt, elapsed_seconds} — you MUST immediately call run_contact_search again with only continuation_token set. Do not ask the user. On completion the response contains record_ids, full contact records, and credits_consumed_total.`,
+        description: `Agent-friendly contact search. On the first call provide domains and enrich_fields; the server starts the job and polls internally for up to ~${RUN_JOB_DEFAULT_MAX_WAIT_SECONDS}s. If still running, returns {status:"pending", continuation_token, attempt, elapsed_seconds} — you MUST immediately call run_contact_search again with only continuation_token set. Do not ask the user. On completion the response contains record_ids, full contact records, and credits_consumed.`,
         inputSchema: {
           continuation_token: z
             .string()
@@ -1206,7 +1206,7 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
       {
         title: 'Run Contact Search (Unenriched, Sync, Beta)',
         description:
-          'POST /v1/contact/search/unenriched/sync. Synchronous unenriched contact search — returns contacts inline (no polling). Requires the `contact_search_unenriched` beta flag. Limits: 10 domains and max_results_per_company ≤ 10. Response includes credits_consumed_total computed as 0.5 × len(contacts).',
+          'POST /v1/contact/search/unenriched/sync. Synchronous unenriched contact search — returns contacts inline (no polling). Requires the `contact_search_unenriched` beta flag. Limits: 10 domains and max_results_per_company ≤ 10. Response includes credits_consumed computed as 0.5 × len(contacts).',
         inputSchema: {
           domains: z.array(z.string()).describe('Up to 10 company domains.'),
           max_results_per_company: z
@@ -1265,13 +1265,13 @@ Docs: https://www.datamerge.ai/docs/llms.txt`,
           record_ids: string[];
           contacts: unknown[];
         };
-        const creditsConsumedTotal = (r.contacts?.length ?? 0) * 0.5;
+        const creditsConsumed = (r.contacts?.length ?? 0) * 0.5;
         const payload = {
           status: r.status,
           total: r.total,
           record_ids: r.record_ids,
           contacts: r.contacts,
-          credits_consumed_total: creditsConsumedTotal,
+          credits_consumed: creditsConsumed,
         };
         return {
           content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],

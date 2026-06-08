@@ -278,7 +278,7 @@ export class DataMergeMCPServer {
           },
           {
             name: 'run_contact_search',
-            description: `Agent-friendly contact search. On the first call provide domains and enrich_fields; the server starts the job and polls internally for up to ~${RUN_JOB_DEFAULT_MAX_WAIT_SECONDS}s. If still running, returns {status:"pending", continuation_token, attempt, elapsed_seconds} — you MUST immediately call run_contact_search again with only continuation_token set. Do not ask the user. On completion the response contains record_ids, full contact records, and credits_consumed_total.`,
+            description: `Agent-friendly contact search. On the first call provide domains and enrich_fields; the server starts the job and polls internally for up to ~${RUN_JOB_DEFAULT_MAX_WAIT_SECONDS}s. If still running, returns {status:"pending", continuation_token, attempt, elapsed_seconds} — you MUST immediately call run_contact_search again with only continuation_token set. Do not ask the user. On completion the response contains record_ids, full contact records, and credits_consumed.`,
             inputSchema: {
               type: 'object',
               properties: {
@@ -612,7 +612,7 @@ export class DataMergeMCPServer {
           {
             name: 'run_contact_search_unenriched',
             description:
-              'POST /v1/contact/search/unenriched/sync. Synchronous unenriched contact search — returns contacts inline (no polling). Requires the contact_search_unenriched beta flag. Limits: 10 domains and max_results_per_company ≤ 10. Response includes credits_consumed_total computed as 0.5 × len(contacts).',
+              'POST /v1/contact/search/unenriched/sync. Synchronous unenriched contact search — returns contacts inline (no polling). Requires the contact_search_unenriched beta flag. Limits: 10 domains and max_results_per_company ≤ 10. Response includes credits_consumed computed as 0.5 × len(contacts).',
             inputSchema: {
               type: 'object',
               properties: {
@@ -1345,13 +1345,13 @@ export class DataMergeMCPServer {
     };
     // Faro pricing: 0.5 credits per contact returned. Computed at MCP layer; the
     // sync endpoint itself does not charge DataMerge credits for unenriched results.
-    const creditsConsumedTotal = (r.contacts?.length ?? 0) * 0.5;
+    const creditsConsumed = (r.contacts?.length ?? 0) * 0.5;
     const payload = {
       status: r.status,
       total: r.total,
       record_ids: r.record_ids,
       contacts: r.contacts,
-      credits_consumed_total: creditsConsumedTotal,
+      credits_consumed: creditsConsumed,
     };
     return {
       content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
